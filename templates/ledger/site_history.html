@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Site history | {{ site.name }}{% endblock %}
+{% block content %}
+<div class="page-heading compact-heading"><div><div class="eyebrow"><a href="{% url 'site-dashboard' site.slug %}">{{ site.name }}</a> / AUDIT</div><h1>Site history</h1></div></div>
+{% if events %}<div class="table-wrap"><table><thead><tr><th>Date/time</th><th>User</th><th>Area</th><th>Record</th><th>Action</th><th>Details</th></tr></thead><tbody>
+{% for event in events %}<tr><td>{{ event.created_at|date:"d M Y H:i:s" }}</td><td>{{ event.actor.get_full_name|default:event.actor.username|default:"System" }}</td><td>{{ event.category }}</td><td>{{ event.object_label }}</td><td>{{ event.action|title }}</td><td><details><summary>Changes</summary><pre>Before: {{ event.before|pprint }}
+After: {{ event.after|pprint }}</pre></details></td></tr>{% endfor %}
+</tbody></table></div>{% else %}<p class="empty-state">No activity has been recorded for this site yet.</p>{% endif %}
+{% endblock %}

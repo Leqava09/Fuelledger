@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Add site user | {{ site.name }}{% endblock %}
+{% block content %}
+<div class="page-heading compact-heading"><div><div class="eyebrow"><a href="{% url 'site-users' site.slug %}">{{ site.name }} / USERS</a></div><h1>Add site user</h1></div></div>
+<form class="entry-form" method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="form-error">{{ form.non_field_errors }}</div>{% endif %}
+    <section class="form-section"><div class="input-grid">
+        {% for field in form %}<div class="form-row">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endfor %}
+    </div></section>
+    <div class="form-actions"><a class="button secondary" href="{% url 'site-users' site.slug %}">Cancel</a><button class="button primary" type="submit">Create user</button></div>
+</form>
+{% endblock %}

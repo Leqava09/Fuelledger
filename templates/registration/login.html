@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Sign in | FuelLedger{% endblock %}
+{% block content %}
+<section class="login-layout">
+    <div class="login-aside">
+        <div class="eyebrow">SITE CASH-UP</div>
+        <h1>FuelLedger</h1>
+        <p>Daily shift records, reconciled by site.</p>
+        <div class="login-rule"></div>
+        <span>Goshen Food Solutions</span>
+    </div>
+    <form class="login-form" method="post">
+        {% csrf_token %}
+        <h2>Sign in</h2>
+        {% if form.errors %}<p class="form-error">Username or password was not recognised.</p>{% endif %}
+        <label for="id_username">Username</label>{{ form.username }}
+        <label for="id_password">Password</label>{{ form.password }}
+        <button class="button primary wide" type="submit">Continue <span aria-hidden="true">→</span></button>
+    </form>
+</section>
+{% endblock %}

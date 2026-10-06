@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Site groups | {{ site.name }}{% endblock %}
+{% block content %}
+<div class="page-heading compact-heading"><div><div class="eyebrow"><a href="{% url 'site-users' site.slug %}">{{ site.name }} / USERS</a></div><h1>Site groups</h1></div></div>
+<section class="section-block"><div class="section-heading"><h2>Create group</h2></div>
+    <form class="config-edit-grid" method="post">{% csrf_token %}
+        <div class="config-field">{{ form.name.label_tag }}{{ form.name }}{{ form.name.errors }}</div>
+        <div class="config-field span-two">{{ form.users.label_tag }}{{ form.users }}{{ form.users.errors }}</div>
+        <button class="button primary span-two" type="submit">Save group</button>
+    </form>
+</section>
+<section class="section-block"><div class="section-heading"><h2>Current groups</h2></div>
+{% if groups %}<div class="table-wrap"><table><thead><tr><th>Group</th><th>Members</th></tr></thead><tbody>
+{% for group in groups %}<tr><td>{{ group.name }}</td><td>{% for account in group.users.all %}{{ account.username }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}<p class="empty-state">No groups created yet.</p>{% endif %}
+</section>
+{% endblock %}

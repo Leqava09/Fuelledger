@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}HQ overview | FuelLedger{% endblock %}
+{% block content %}
+<div class="page-heading">
+    <div><div class="eyebrow">HEAD OFFICE</div><h1>Cash-up overview</h1></div>
+    {% if request.user.is_staff %}<a class="button secondary" href="{% url 'admin:index' %}">Manage users and sites <span aria-hidden="true">↗</span></a>{% endif %}
+</div>
+<section class="section-block">
+    <div class="section-heading"><h2>Sites</h2><span>{{ sites|length }} active</span></div>
+    {% if sites %}
+    <div class="site-grid">
+        {% for site in sites %}
+        <a class="site-row" href="{% url 'site-dashboard' site.slug %}">
+            <span class="site-initial">{{ site.name|first|upper }}</span>
+            <span class="site-copy"><strong>{{ site.name }}</strong><small>Open site ledger</small></span>
+            <span class="row-arrow" aria-hidden="true">→</span>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}<p class="empty-state">Add the first site in user and site administration.</p>{% endif %}
+</section>
+<section class="section-block">
+    <div class="section-heading"><h2>Latest submissions</h2></div>
+    {% if recent_entries %}
+    <div class="table-wrap"><table><thead><tr><th>Site</th><th>Business date</th><th>Shift</th><th>Entered by</th><th></th></tr></thead><tbody>
+        {% for entry in recent_entries %}<tr><td>{{ entry.site.name }}</td><td>{{ entry.business_date|date:"d M Y" }}</td><td>{{ entry.shift_label }}</td><td>{{ entry.created_by.get_full_name|default:entry.created_by.username }}</td><td><a class="table-link" href="{% url 'entry-detail' entry.site.slug entry.pk %}">View</a></td></tr>{% endfor %}
+    </tbody></table></div>
+    {% else %}<p class="empty-state">No shift records have been submitted.</p>{% endif %}
+</section>
+{% endblock %}

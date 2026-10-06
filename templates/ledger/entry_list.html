@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Shift records | {{ site.name }}{% endblock %}
+{% block content %}
+<div class="page-heading">
+    <div><div class="eyebrow"><a href="{% url 'site-dashboard' site.slug %}">{{ site.name }}</a> / RECORDS</div><h1>Shift records</h1></div>
+</div>
+{% if entries %}<div class="table-wrap"><table><thead><tr><th>Date</th><th>Shift</th><th>Entered by</th><th>Submitted</th><th></th></tr></thead><tbody>
+{% for entry in entries %}<tr><td>{{ entry.business_date|date:"d M Y" }}</td><td>{{ entry.shift_label }}</td><td>{{ entry.created_by.get_full_name|default:entry.created_by.username }}</td><td>{{ entry.created_at|date:"d M Y H:i" }}</td><td><a class="table-link" href="{% url 'entry-detail' site.slug entry.pk %}">View</a></td></tr>{% endfor %}
+</tbody></table></div>{% else %}<p class="empty-state">No shift records yet.</p>{% endif %}
+{% endblock %}

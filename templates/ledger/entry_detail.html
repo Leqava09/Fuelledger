@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ entry.business_date|date:"d M Y" }} | {{ site.name }}{% endblock %}
+{% block content %}
+<div class="page-heading compact-heading">
+    <div><div class="eyebrow"><a href="{% url 'site-dashboard' site.slug %}">{{ site.name }}</a> / SHIFT RECORD</div><h1>{{ entry.business_date|date:"d F Y" }} <span class="heading-muted">· {{ entry.shift_label }}</span></h1><p class="subheading">Entered by {{ entry.created_by.get_full_name|default:entry.created_by.username }} at {{ entry.created_at|date:"H:i, d M Y" }}</p></div>
+    <span class="status-pill">{{ entry.get_status_display }}</span>
+</div>
+{% for section, items in sections.items %}<section class="section-block detail-section"><div class="section-heading"><h2>{{ section }}</h2></div><dl class="value-list">
+    {% for item in items %}<div class="value-row"><dt>{{ item.label }}</dt><dd>{% if item.field_type == "calculated" %}<span class="calculated-value">{{ item.value|default:"—" }}</span>{% else %}{{ item.value|default:"—" }}{% endif %}</dd></div>{% endfor %}
+</dl></section>{% endfor %}
+<div class="form-actions"><a class="button secondary" href="{% url 'entry-list' site.slug %}">Back to records</a></div>
+{% endblock %}

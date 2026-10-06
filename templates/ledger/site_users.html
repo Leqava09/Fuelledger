@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Site users | {{ site.name }}{% endblock %}
+{% block content %}
+<div class="page-heading">
+    <div><div class="eyebrow"><a href="{% url 'site-dashboard' site.slug %}">{{ site.name }}</a> / SITE ACCESS</div><h1>Users and groups</h1></div>
+    <div class="heading-actions">
+        <a class="button secondary" href="{% url 'site-groups' site.slug %}">Manage groups</a>
+        <a class="button primary" href="{% url 'site-user-create' site.slug %}">Add user</a>
+    </div>
+</div>
+<section class="section-block">
+    <div class="section-heading"><h2>Site users</h2><span>{{ users|length }}</span></div>
+    {% if users %}<div class="table-wrap"><table><thead><tr><th>Username</th><th>Name</th><th>Email</th><th>Groups</th><th>Status</th></tr></thead><tbody>
+    {% for account in users %}<tr><td>{{ account.username }}</td><td>{{ account.get_full_name|default:"—" }}</td><td>{{ account.email|default:"—" }}</td><td>{% for group in account.fuel_site_groups.all %}{{ group.name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</td><td>{% if account.is_active %}Active{% else %}Inactive{% endif %}</td></tr>{% endfor %}
+    </tbody></table></div>{% else %}<p class="empty-state">No users are assigned to this site.</p>{% endif %}
+</section>
+<section class="section-block"><div class="section-heading"><h2>Groups</h2></div>
+    {% if groups %}<div class="table-wrap"><table><thead><tr><th>Group</th><th>Members</th></tr></thead><tbody>
+    {% for group in groups %}<tr><td>{{ group.name }}</td><td>{% for account in group.users.all %}{{ account.username }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</td></tr>{% endfor %}
+    </tbody></table></div>{% else %}<p class="empty-state">No site groups have been created.</p>{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Daily Fuel Readings | {{ site.name }}{% endblock %}
+{% block content %}
+<div class="page-heading compact-heading">
+    <div>
+        <div class="eyebrow"><a href="{% url 'site-dashboard' site.slug %}?date={{ selected_date|date:'Y-m-d' }}">{{ site.name }}</a> / {{ selected_date|date:"d M Y" }} / {{ shift_label }}</div>
+        <h1>Daily Fuel Readings</h1>
+    </div>
+    <a class="button secondary" href="{% url 'site-history' site.slug %}">History</a>
+</div>
+{% if tank_rows %}
+<form class="entry-form" method="post">
+    {% csrf_token %}
+    {{ form.business_date }}{{ form.shift_label }}
+    {% if form.non_field_errors %}<div class="form-error">{{ form.non_field_errors }}</div>{% endif %}
+    {% for tank, dip_field, nozzle_rows in tank_rows %}
+    <section class="form-section">
+        <div class="form-section-title"><span>{{ forloop.counter|stringformat:"02d" }}</span><h2>{{ tank.name }} <span class="heading-muted">· {{ tank.product }}</span></h2></div>
+        <div class="reading-grid">
+            <div class="form-row">{{ dip_field.label_tag }}{{ dip_field }}{{ dip_field.errors }}</div>
+        </div>
+        {% if nozzle_rows %}
+        <div class="reading-table-wrap">
+            <table class="reading-table">
+                <thead><tr><th>Nozzle</th><th>Mechanical reading</th><th>Electronic reading</th></tr></thead>
+                <tbody>
+                    {% for nozzle, mechanical_field, electronic_field in nozzle_rows %}
+                    <tr>
+                        <td>{{ nozzle.name }}</td>
+                        <td>{{ mechanical_field }}{{ mechanical_field.errors }}</td>
+                        <td>{{ electronic_field }}{{ electronic_field.errors }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}<p class="subheading">No nozzles configured for this tank.</p>{% endif %}
+    </section>
+    {% endfor %}
+    <div class="form-actions"><button class="button primary" type="submit">Save readings</button></div>
+</form>
+{% else %}
+<p class="empty-state">No tanks are configured for this site yet.</p>
+{% endif %}
+{% endblock %}
