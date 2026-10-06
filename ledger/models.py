@@ -4,6 +4,19 @@ from django.db import models
 from django.utils.text import slugify
 
 
+SITE_FORM_PERMISSION_CHOICES = [
+	("book-in-fuel", "Book IN Fuel"),
+	("tank-reading", "Tank Reading"),
+	("mechanical-readings", "Mechanical Readings"),
+	("electronic-readings", "Electronic Readings"),
+	("cash-up", "Cash Up"),
+]
+
+
+def default_site_form_permissions():
+	return [permission for permission, _ in SITE_FORM_PERMISSION_CHOICES]
+
+
 class Site(models.Model):
 	SHIFT_COUNT_CHOICES = [
 		(1, "1"),
@@ -57,6 +70,7 @@ class Tank(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="tanks")
 	name = models.CharField(max_length=70, help_text="For example: Tank 1")
 	product = models.CharField(max_length=90, help_text="For example: Diesel")
+	capacity_litres = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, verbose_name="Tank capacity (L)")
 
 	class Meta:
 		ordering = ["name"]
@@ -116,19 +130,28 @@ class ManualShopPoint(models.Model):
 
 
 class FuelBooking(models.Model):
+	MAX_DELIVERIES_PER_SHIFT = 5
+	DELIVERY_NUMBER_CHOICES = [(number, str(number)) for number in range(1, MAX_DELIVERIES_PER_SHIFT + 1)]
+
 	site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="fuel_bookings")
 	tank = models.ForeignKey(Tank, on_delete=models.PROTECT, related_name="fuel_bookings")
 	business_date = models.DateField()
 	shift_label = models.CharField(max_length=30)
+	delivery_number = models.PositiveSmallIntegerField(default=1, choices=DELIVERY_NUMBER_CHOICES)
+	truck_reference = models.CharField(max_length=50, blank=True, verbose_name="Truck / delivery reference")
 	qty_litres = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="Qty L booked in")
 	created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="fuel_bookings")
 	created_at = models.DateTimeField(auto_now_add=True)
 	updated_at = models.DateTimeField(auto_now=True)
 
 	class Meta:
-		ordering = ["-business_date", "tank__name"]
+		ordering = ["-business_date", "shift_label", "delivery_number", "tank__name"]
 		constraints = [
-			models.UniqueConstraint(fields=["site", "tank", "business_date", "shift_label"], name="unique_fuel_booking_per_site_tank_date_shift"),
+			models.UniqueConstraint(fields=["site", "tank", "business_date", "shift_label", "delivery_number"], name="unique_fuel_booking_per_delivery_tank"),
+			models.CheckConstraint(
+				condition=models.Q(delivery_number__gte=1, delivery_number__lte=5),
+				name="fuel_booking_delivery_number_range",
+			),
 		]
 
 	def clean(self):
@@ -136,9 +159,11 @@ class FuelBooking(models.Model):
 			raise ValidationError({"tank": "The selected tank must belong to this site."})
 		if self.site_id and self.shift_label not in self.site.get_shift_names():
 			raise ValidationError({"shift_label": "Select a shift configured for this site."})
+		if not 1 <= self.delivery_number <= self.MAX_DELIVERIES_PER_SHIFT:
+			raise ValidationError({"delivery_number": "Delivery number must be between 1 and 5."})
 
 	def __str__(self):
-		return f"{self.site} / {self.tank} / {self.business_date}"
+		return f"{self.site} / {self.business_date} / {self.shift_label} / Delivery {self.delivery_number} / {self.tank}"
 
 
 class UserProfile(models.Model):
@@ -151,6 +176,7 @@ class UserProfile(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.PROTECT, null=True, blank=True, related_name="users")
 	can_configure = models.BooleanField(default=False, verbose_name="Can configure cash-up fields")
 	can_manage_users = models.BooleanField(default=False, verbose_name="Can manage site users and groups")
+	form_permissions = models.JSONField(default=default_site_form_permissions, blank=True)
 
 	def clean(self):
 		if self.role == self.Role.SITE and self.site_id is None:
@@ -277,6 +303,7 @@ class TankDipReading(models.Model):
 	daily_reading = models.ForeignKey(DailyFuelReading, on_delete=models.CASCADE, related_name="tank_readings")
 	tank = models.ForeignKey(Tank, on_delete=models.PROTECT, related_name="dip_readings")
 	dip_litres = models.DecimalField(max_digits=12, decimal_places=2)
+	depth_cm = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, verbose_name="Depth (cm)")
 
 	class Meta:
 		constraints = [
@@ -287,8 +314,8 @@ class TankDipReading(models.Model):
 class NozzleFuelReading(models.Model):
 	daily_reading = models.ForeignKey(DailyFuelReading, on_delete=models.CASCADE, related_name="nozzle_readings")
 	nozzle = models.ForeignKey(Nozzle, on_delete=models.PROTECT, related_name="daily_readings")
-	mechanical_reading = models.DecimalField(max_digits=14, decimal_places=2)
-	electronic_reading = models.DecimalField(max_digits=14, decimal_places=2)
+	mechanical_reading = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+	electronic_reading = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
 
 	class Meta:
 		constraints = [
@@ -300,6 +327,7 @@ class SiteGroup(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="groups")
 	name = models.CharField(max_length=100)
 	users = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name="fuel_site_groups")
+	form_permissions = models.JSONField(default=list, blank=True)
 	created_at = models.DateTimeField(auto_now_add=True)
 
 	class Meta:
@@ -313,8 +341,13 @@ class SiteGroup(models.Model):
 
 
 class SiteAuditEvent(models.Model):
+	class Origin(models.TextChoices):
+		SITE = "SITE", "Site workflow"
+		HQ = "HQ", "Head office"
+
 	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="audit_events")
 	actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="fuel_audit_events")
+	origin = models.CharField(max_length=4, choices=Origin.choices, default=Origin.SITE)
 	category = models.CharField(max_length=40)
 	object_label = models.CharField(max_length=160)
 	action = models.CharField(max_length=20)

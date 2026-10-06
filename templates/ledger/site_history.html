@@ -1,9 +1,20 @@
 {% extends "base.html" %}
-{% block title %}Site history | {{ site.name }}{% endblock %}
+{% block title %}{% if form_label %}{{ form_label }} history | {{ site.name }}{% else %}Site history | {{ site.name }}{% endif %}{% endblock %}
 {% block content %}
-<div class="page-heading compact-heading"><div><div class="eyebrow"><a href="{% url 'site-dashboard' site.slug %}">{{ site.name }}</a> / AUDIT</div><h1>Site history</h1></div></div>
+<div class="page-heading compact-heading">
+	<div>
+		{% if form_label %}
+		<div class="eyebrow"><a href="{% url 'site-dashboard' site.slug %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ shift_label|urlencode }}">{{ site.name }}</a> / {{ selected_date|date:"d M Y" }} / {{ shift_label }} / HISTORY</div>
+		<h1>{{ form_label }} history</h1>
+		{% else %}
+		<div class="eyebrow"><a href="{% url 'site-dashboard' site.slug %}">{{ site.name }}</a> / AUDIT</div>
+		<h1>Site history</h1>
+		{% endif %}
+	</div>
+	{% if form_url %}<a class="button secondary" href="{{ form_url }}">Back to form</a>{% endif %}
+</div>
 {% if events %}<div class="table-wrap"><table><thead><tr><th>Date/time</th><th>User</th><th>Area</th><th>Record</th><th>Action</th><th>Details</th></tr></thead><tbody>
 {% for event in events %}<tr><td>{{ event.created_at|date:"d M Y H:i:s" }}</td><td>{{ event.actor.get_full_name|default:event.actor.username|default:"System" }}</td><td>{{ event.category }}</td><td>{{ event.object_label }}</td><td>{{ event.action|title }}</td><td><details><summary>Changes</summary><pre>Before: {{ event.before|pprint }}
 After: {{ event.after|pprint }}</pre></details></td></tr>{% endfor %}
-</tbody></table></div>{% else %}<p class="empty-state">No activity has been recorded for this site yet.</p>{% endif %}
+</tbody></table></div>{% else %}<p class="empty-state">{% if form_label %}No history has been recorded for this form yet.{% else %}No activity has been recorded for this site yet.{% endif %}</p>{% endif %}
 {% endblock %}

@@ -1,13 +1,44 @@
 {% extends "base.html" %}
-{% block title %}Add site user | {{ site.name }}{% endblock %}
+{% load static %}
+{% block title %}{% if edit_mode %}Edit site user{% else %}Add site user{% endif %} | {{ site.name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'grappelli/stylesheets/screen.css' %}">
+{{ form.media }}
+{% endblock %}
 {% block content %}
-<div class="page-heading compact-heading"><div><div class="eyebrow"><a href="{% url 'site-users' site.slug %}">{{ site.name }} / USERS</a></div><h1>Add site user</h1></div><a class="button secondary" href="{% url 'site-history' site.slug %}">History</a></div>
-<form class="entry-form" method="post">
+<div class="page-heading compact-heading">
+    <div><div class="eyebrow"><a href="{% url 'site-users' site.slug %}">{{ site.name }} / USERS</a></div><h1>{% if edit_mode %}Edit site user{% else %}Add site user{% endif %}</h1></div>
+    <a class="button secondary" href="{% url 'site-history' site.slug %}">History</a>
+</div>
+<form class="site-user-admin-form" method="post">
     {% csrf_token %}
     {% if form.non_field_errors %}<div class="form-error">{{ form.non_field_errors }}</div>{% endif %}
-    <section class="form-section"><div class="input-grid">
-        {% for field in form %}<div class="form-row">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endfor %}
-    </div></section>
-    <div class="form-actions"><a class="button secondary" href="{% url 'site-users' site.slug %}">Cancel</a><button class="button primary" type="submit">Create user</button></div>
+    <fieldset class="grp-module">
+        <h2>Account details</h2>
+        {% for field in form %}
+            {% if field.name == "username" or field.name == "first_name" or field.name == "last_name" or field.name == "email" or field.name == "is_active" or field.name == "password" or field.name == "confirm_password" %}
+            <div class="grp-row">
+                {{ field.label_tag }}{{ field }}
+                {% if field.help_text %}<p class="help">{{ field.help_text }}</p>{% endif %}
+                {{ field.errors }}
+            </div>
+            {% endif %}
+        {% endfor %}
+    </fieldset>
+    <fieldset class="grp-module">
+        <h2>Site groups</h2>
+        <div class="grp-row">{{ form.groups.label_tag }}{{ form.groups }}{{ form.groups.errors }}</div>
+    </fieldset>
+    <fieldset class="grp-module">
+        <h2>Site permissions</h2>
+        <div class="grp-row">{{ form.form_permissions.label_tag }}{{ form.form_permissions }}{{ form.form_permissions.errors }}</div>
+        <div class="grp-row">{{ form.can_configure }}{{ form.can_configure.label_tag }}{{ form.can_configure.errors }}</div>
+        <div class="grp-row">{{ form.can_manage_users }}{{ form.can_manage_users.label_tag }}{{ form.can_manage_users.errors }}</div>
+    </fieldset>
+    <div class="form-actions">
+        <a class="button secondary" href="{% url 'site-users' site.slug %}">Cancel</a>
+        <button class="button primary" type="submit">{% if edit_mode %}Save user{% else %}Create user{% endif %}</button>
+    </div>
 </form>
 {% endblock %}
+{% block extra_js %}<script src="{% static 'js/site_permission_selectors.js' %}" defer></script>{% endblock %}

@@ -64,6 +64,7 @@ class SiteConfigurationAdminTests(TestCase):
         self.assertContains(response, "Site Name")
         self.assertContains(response, "Amount of shifts")
         self.assertContains(response, "Tanks")
+        self.assertContains(response, "Tank capacity (L)")
         self.assertContains(response, "Nozzles")
         self.assertContains(response, "EFT/Driveway")
         self.assertContains(response, "EFT/Driveway no/ID")
@@ -84,6 +85,20 @@ class SiteConfigurationAdminTests(TestCase):
         self.assertEqual(field_positions, sorted(field_positions))
         for field_name in ("name", "manager_name", "contact_number", "contact_email"):
             self.assertIn("width: 50%", html[html.index(f'id="id_{field_name}"') - 300:html.index(f'id="id_{field_name}"') + 300])
+
+    def test_hq_user_admin_exposes_site_form_permissions_in_grappelli_inline(self):
+        admin_user = User.objects.create_superuser(username="permission-admin", password="test-pass-123", email="permission-admin@example.com")
+        site = Site.objects.create(name="Permission Admin Site")
+        site_user = User.objects.create_user(username="permission-site-user", password="test-pass-123")
+        UserProfile.objects.create(user=site_user, role=UserProfile.Role.SITE, site=site)
+        client = Client()
+        client.force_login(admin_user)
+
+        response = client.get(reverse("admin:auth_user_change", args=[site_user.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Site form permissions")
+        self.assertContains(response, "selectfilter")
 
     def test_site_registration_contains_currency_and_cash_up_additional_inline(self):
         admin_user = User.objects.create_superuser(username="currency-admin", password="test-pass-123", email="currency-admin@example.com")
@@ -165,6 +180,8 @@ class SiteConfigurationAdminTests(TestCase):
         self.assertEqual(nozzle_form.fields["name"].widget.attrs["style"], "width: 45px; max-width: 100%;")
         self.assertEqual(tank_form.fields["name"].max_length, 70)
         self.assertEqual(tank_form.fields["product"].max_length, 90)
+        self.assertEqual(tank_form.fields["capacity_litres"].max_digits, 12)
+        self.assertEqual(tank_form.fields["capacity_litres"].widget.attrs["step"], "0.01")
         self.assertTrue(all(
             SiteAdminForm().fields[field_name].widget.attrs["style"].startswith("width: 50%;")
             for field_name in ("name", "manager_name", "contact_number", "contact_email")
@@ -173,7 +190,7 @@ class SiteConfigurationAdminTests(TestCase):
     def test_tank_heading_does_not_repeat_tank_prefix(self):
         admin_user = User.objects.create_superuser(username="tank-admin", password="test-pass-123", email="tank-admin@example.com")
         site = Site.objects.create(name="Tank Heading Test")
-        Tank.objects.create(site=site, name="Tank 1", product="Diesel 50 ppm")
+        Tank.objects.create(site=site, name="Tank 1", product="Diesel 50 ppm", capacity_litres="25000.00")
         client = Client()
         client.force_login(admin_user)
 
@@ -184,6 +201,8 @@ class SiteConfigurationAdminTests(TestCase):
         tank_heading_fragments = re.findall(r".{0,30}Diesel 50 ppm.{0,10}", page_text)
         self.assertTrue("Tank 1 - Diesel 50 ppm" in page_text, repr(tank_heading_fragments))
         self.assertIn('id="id_tanks-0-product"', response.content.decode())
+        self.assertIn('id="id_tanks-0-capacity_litres"', response.content.decode())
+        self.assertContains(response, "25000.00")
 
     def test_site_admin_audits_inline_tank_changes(self):
         admin_user = User.objects.create_superuser(username="audit-admin", password="test-pass-123", email="audit-admin@example.com")
@@ -280,15 +299,22 @@ class SiteAccessTests(TestCase):
         self.assertNotContains(past_response, f"/sites/{self.site_one.slug}/forms/")
 
         selected_shift = self.client.get(url, {"date": selected_date.isoformat(), "shift": "Day"})
-        for key in ("book-in-fuel", "daily-fuel-readings", "cash-up"):
+        for key in ("book-in-fuel", "cash-up"):
             self.assertContains(
                 selected_shift,
                 f"/sites/{self.site_one.slug}/forms/{key}/?date={selected_date.isoformat()}&amp;shift=Day",
+            )
+        for reading_type in ("tank-reading", "mechanical-readings", "electronic-readings"):
+            self.assertContains(
+                selected_shift,
+                f"/sites/{self.site_one.slug}/forms/fuel-readings/{reading_type}/?date={selected_date.isoformat()}&amp;shift=Day",
             )
 
     def test_site_dashboard_shows_forms_only_after_configured_shift_is_selected(self):
         self.site_one.shift_count = 3
         self.site_one.save(update_fields=["shift_count"])
+        self.site_user.fuel_profile.can_manage_users = True
+        self.site_user.fuel_profile.save(update_fields=["can_manage_users"])
         self.client.force_login(self.site_user)
         selected_date = timezone.localdate() - timedelta(days=1)
         url = reverse("site-dashboard", args=[self.site_one.slug])
@@ -304,11 +330,22 @@ class SiteAccessTests(TestCase):
         self.assertContains(shift_page, "Morning shift")
         self.assertContains(shift_page, f'?date={selected_date.isoformat()}"')
         self.assertContains(shift_page, "Change shift")
-        for key in ("book-in-fuel", "daily-fuel-readings", "cash-up"):
+        dashboard_html = shift_page.content.decode()
+        self.assertLess(dashboard_html.index("Users and groups"), dashboard_html.index('<section class="date-workspace">'))
+        self.assertLess(dashboard_html.index("History"), dashboard_html.index('<section class="date-workspace">'))
+        for key in ("book-in-fuel", "cash-up"):
             self.assertContains(
                 shift_page,
                 f"/sites/{self.site_one.slug}/forms/{key}/?date={selected_date.isoformat()}&amp;shift=Morning",
             )
+        self.assertContains(shift_page, "Fuel Readings")
+        for reading_type in ("tank-reading", "mechanical-readings", "electronic-readings"):
+            self.assertContains(
+                shift_page,
+                f"/sites/{self.site_one.slug}/forms/fuel-readings/{reading_type}/?date={selected_date.isoformat()}&amp;shift=Morning",
+            )
+        self.assertContains(shift_page, "fuel-reading-tab button")
+        self.assertNotContains(shift_page, f"/sites/{self.site_one.slug}/forms/daily-fuel-readings/?")
 
     def test_future_calendar_date_defaults_back_to_today(self):
         self.client.force_login(self.site_user)
@@ -355,19 +392,28 @@ class SiteAccessTests(TestCase):
         self.assertContains(page, "Tank 1")
         self.assertContains(page, "Diesel")
         self.assertContains(page, "Qty L booked in")
+        self.assertContains(
+            page,
+            f"{reverse('site-form-history', args=[self.site_one.slug, 'book-in-fuel'])}?date={selected_date.isoformat()}&amp;shift=Day",
+        )
         self.assertNotContains(page, other_tank.name)
 
         response = self.client.post(shift_url, {
             "business_date": selected_date.isoformat(),
             "shift_label": "Day",
-            f"tank_{tank.pk}_qty_litres": "1250.50",
+            "delivery_count": "1",
+            "delivery_1_truck_reference": "Truck 1",
+            f"delivery_1_tank_{tank.pk}_qty_litres": "1250.50",
         })
 
         self.assertEqual(response.status_code, 302)
         booking = FuelBooking.objects.get(site=self.site_one, tank=tank, business_date=selected_date, shift_label="Day")
         self.assertEqual(str(booking.qty_litres), "1250.50")
+        self.assertEqual(booking.delivery_number, 1)
+        self.assertEqual(booking.truck_reference, "Truck 1")
         reopened = self.client.get(url, {"date": selected_date.isoformat(), "shift": "Day"})
         self.assertContains(reopened, 'value="1250.50"')
+        self.assertContains(reopened, 'value="Truck 1"')
 
     def test_book_in_fuel_records_are_independent_per_shift(self):
         self.site_one.shift_count = 2
@@ -382,7 +428,8 @@ class SiteAccessTests(TestCase):
             response = self.client.post(shift_url, {
                 "business_date": selected_date.isoformat(),
                 "shift_label": shift,
-                f"tank_{tank.pk}_qty_litres": quantity,
+                "delivery_count": "1",
+                f"delivery_1_tank_{tank.pk}_qty_litres": quantity,
             })
             self.assertEqual(response.status_code, 302)
 
@@ -394,13 +441,69 @@ class SiteAccessTests(TestCase):
             {"100.00", "200.00"},
         )
 
+    def test_book_in_fuel_adds_and_saves_multiple_deliveries_dynamically(self):
+        tank = Tank.objects.create(site=self.site_one, name="Tank 1", product="Diesel")
+        selected_date = timezone.localdate() - timedelta(days=1)
+        url = reverse("blank-site-form", args=[self.site_one.slug, "book-in-fuel"])
+        shift_url = f"{url}?date={selected_date.isoformat()}&shift=Day"
+        self.client.force_login(self.site_user)
+
+        page = self.client.get(shift_url)
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "Delivery 1")
+        self.assertNotContains(page, "Delivery 2")
+        self.assertContains(page, "Add another delivery")
+        self.assertContains(page, 'name="delivery_count" value="1"')
+        self.assertContains(page, "book_in_fuel_deliveries.js")
+
+        response = self.client.post(shift_url, {
+            "business_date": selected_date.isoformat(),
+            "shift_label": "Day",
+            "delivery_count": "2",
+            "delivery_1_truck_reference": "Truck A",
+            f"delivery_1_tank_{tank.pk}_qty_litres": "100.00",
+            "delivery_2_truck_reference": "Truck B",
+            f"delivery_2_tank_{tank.pk}_qty_litres": "200.00",
+        })
+
+        self.assertEqual(response.status_code, 302)
+        bookings = FuelBooking.objects.filter(site=self.site_one, tank=tank, business_date=selected_date, shift_label="Day")
+        self.assertEqual(bookings.count(), 2)
+        self.assertEqual(
+            set(bookings.values_list("delivery_number", "truck_reference", "qty_litres")),
+            {(1, "Truck A", 100), (2, "Truck B", 200)},
+        )
+        reopened = self.client.get(url, {"date": selected_date.isoformat(), "shift": "Day"})
+        self.assertContains(reopened, "Delivery 1")
+        self.assertContains(reopened, "Delivery 2")
+        self.assertContains(reopened, 'value="Truck A"')
+        self.assertContains(reopened, 'value="Truck B"')
+
+    def test_book_in_fuel_rejects_more_than_five_deliveries(self):
+        tank = Tank.objects.create(site=self.site_one, name="Tank 1", product="Diesel")
+        selected_date = timezone.localdate() - timedelta(days=1)
+        url = reverse("blank-site-form", args=[self.site_one.slug, "book-in-fuel"])
+        self.client.force_login(self.site_user)
+
+        response = self.client.post(f"{url}?date={selected_date.isoformat()}&shift=Day", {
+            "business_date": selected_date.isoformat(),
+            "shift_label": "Day",
+            "delivery_count": "6",
+            "delivery_1_truck_reference": "Truck A",
+            f"delivery_1_tank_{tank.pk}_qty_litres": "100.00",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Ensure this value is less than or equal to 5")
+        self.assertFalse(FuelBooking.objects.filter(site=self.site_one, business_date=selected_date).exists())
+
     def test_site_forms_and_user_management_link_to_history(self):
         self.site_user.fuel_profile.can_manage_users = True
         self.site_user.fuel_profile.save(update_fields=["can_manage_users"])
+        SiteGroup.objects.create(site=self.site_one, name="Test group", form_permissions=["book-in-fuel"])
         self.client.force_login(self.site_user)
         history_url = reverse("site-history", args=[self.site_one.slug])
         urls = (
-            f"{reverse('blank-site-form', args=[self.site_one.slug, 'cash-up'])}?date={timezone.localdate().isoformat()}&shift=Day",
             reverse("site-users", args=[self.site_one.slug]),
             reverse("site-user-create", args=[self.site_one.slug]),
             reverse("site-groups", args=[self.site_one.slug]),
@@ -411,6 +514,15 @@ class SiteAccessTests(TestCase):
                 response = self.client.get(url)
                 self.assertEqual(response.status_code, 200)
                 self.assertContains(response, history_url)
+                if url == reverse("site-groups", args=[self.site_one.slug]):
+                    self.assertContains(response, "selectfilter")
+                    self.assertContains(response, "Granted forms")
+
+            cash_up_url = f"{reverse('blank-site-form', args=[self.site_one.slug, 'cash-up'])}?date={timezone.localdate().isoformat()}&shift=Day"
+            cash_up_response = self.client.get(cash_up_url)
+            self.assertEqual(cash_up_response.status_code, 200)
+            self.assertContains(cash_up_response, reverse("site-form-history", args=[self.site_one.slug, "cash-up"]))
+            self.assertNotContains(cash_up_response, history_url)
 
     def test_site_user_and_group_creation_are_recorded_in_history(self):
         self.site_user.fuel_profile.can_manage_users = True
@@ -438,60 +550,273 @@ class SiteAccessTests(TestCase):
         self.assertContains(self.client.get(reverse("site-history", args=[self.site_one.slug])), "Site group")
         self.assertContains(self.client.get(reverse("site-history", args=[self.site_one.slug])), "Site user")
 
+    def test_site_user_editor_changes_only_users_at_the_current_site(self):
+        self.site_user.fuel_profile.can_manage_users = True
+        self.site_user.fuel_profile.save(update_fields=["can_manage_users"])
+        target = User.objects.create_user(username="site-target", password="initial-password")
+        UserProfile.objects.create(user=target, role=UserProfile.Role.SITE, site=self.site_one)
+        other_site_user = User.objects.create_user(username="other-site-target", password="initial-password")
+        UserProfile.objects.create(user=other_site_user, role=UserProfile.Role.SITE, site=self.site_two)
+        group = SiteGroup.objects.create(site=self.site_one, name="Book-in operators")
+        self.client.force_login(self.site_user)
+        edit_url = reverse("site-user-edit", args=[self.site_one.slug, target.pk])
+
+        page = self.client.get(edit_url)
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "selectfilter")
+        self.assertContains(page, "Site permissions")
+        self.assertEqual(self.client.get(reverse("site-user-edit", args=[self.site_one.slug, other_site_user.pk])).status_code, 404)
+
+        response = self.client.post(edit_url, {
+            "username": "site-target",
+            "first_name": "Updated",
+            "last_name": "Operator",
+            "email": "updated@example.com",
+            "is_active": "on",
+            "groups": [str(group.pk)],
+            "form_permissions": ["book-in-fuel"],
+            "can_configure": "on",
+            "password": "",
+            "confirm_password": "",
+        })
+
+        self.assertEqual(response.status_code, 302)
+        target.refresh_from_db()
+        self.assertEqual(target.first_name, "Updated")
+        self.assertIn(group, target.fuel_site_groups.all())
+        self.assertEqual(target.fuel_profile.form_permissions, ["book-in-fuel"])
+        self.assertTrue(target.fuel_profile.can_configure)
+        self.assertFalse(target.fuel_profile.can_manage_users)
+        self.assertTrue(self.site_one.audit_events.filter(category="Site user", object_label="site-target", action="changed").exists())
+
+    def test_site_group_grants_are_site_scoped_and_control_form_access(self):
+        self.site_user.fuel_profile.can_manage_users = True
+        self.site_user.fuel_profile.form_permissions = []
+        self.site_user.fuel_profile.save(update_fields=["can_manage_users", "form_permissions"])
+        self.client.force_login(self.site_user)
+
+        response = self.client.post(reverse("site-groups", args=[self.site_one.slug]), {
+            "name": "Book-in operators",
+            "users": [str(self.site_user.pk)],
+            "form_permissions": ["book-in-fuel"],
+        })
+
+        self.assertEqual(response.status_code, 302)
+        group = SiteGroup.objects.get(site=self.site_one, name="Book-in operators")
+        self.assertEqual(group.form_permissions, ["book-in-fuel"])
+        dashboard = self.client.get(reverse("site-dashboard", args=[self.site_one.slug]), {
+            "date": timezone.localdate().isoformat(),
+            "shift": "Day",
+        })
+        self.assertContains(dashboard, "Book IN Fuel")
+        self.assertNotContains(dashboard, "Tank Reading")
+        self.assertNotContains(dashboard, "Cash Up")
+        self.assertEqual(self.client.get(
+            f"{reverse('blank-site-form', args=[self.site_one.slug, 'cash-up'])}?date={timezone.localdate().isoformat()}&shift=Day",
+        ).status_code, 403)
+        self.assertEqual(self.client.get(
+            f"{reverse('blank-site-form', args=[self.site_one.slug, 'book-in-fuel'])}?date={timezone.localdate().isoformat()}&shift=Day",
+        ).status_code, 200)
+
+    def test_site_group_edit_updates_site_members_and_permissions(self):
+        self.site_user.fuel_profile.can_manage_users = True
+        self.site_user.fuel_profile.save(update_fields=["can_manage_users"])
+        group = SiteGroup.objects.create(site=self.site_one, name="Cash-up team", form_permissions=["cash-up"])
+        self.client.force_login(self.site_user)
+        edit_url = reverse("site-group-edit", args=[self.site_one.slug, group.pk])
+        self.assertEqual(self.client.get(edit_url).status_code, 200)
+        self.assertEqual(self.client.get(reverse("site-group-edit", args=[self.site_two.slug, group.pk])).status_code, 403)
+
+        response = self.client.post(edit_url, {
+            "name": "Fuel team",
+            "users": [str(self.site_user.pk)],
+            "form_permissions": ["book-in-fuel", "tank-reading"],
+        })
+
+        self.assertEqual(response.status_code, 302)
+        group.refresh_from_db()
+        self.assertEqual(group.name, "Fuel team")
+        self.assertEqual(group.form_permissions, ["book-in-fuel", "tank-reading"])
+        self.assertIn(self.site_user, group.users.all())
+        self.assertTrue(self.site_one.audit_events.filter(category="Site group", object_label="Fuel team", action="changed").exists())
+
+    def test_form_history_is_limited_to_selected_form_date_and_shift(self):
+        self.client.force_login(self.site_user)
+        selected_date = timezone.localdate() - timedelta(days=1)
+        other_date = selected_date - timedelta(days=1)
+        SiteAuditEvent.objects.create(
+            site=self.site_one,
+            actor=self.site_user,
+            category="Book IN Fuel",
+            object_label=f"{selected_date.isoformat()} / Day",
+            action="saved",
+            after={"reference": "TRUCK-A"},
+        )
+        SiteAuditEvent.objects.create(
+            site=self.site_one,
+            actor=self.site_user,
+            category="Book IN Fuel",
+            object_label=f"{other_date.isoformat()} / Day",
+            action="saved",
+            after={"reference": "TRUCK-OLD"},
+        )
+        SiteAuditEvent.objects.create(
+            site=self.site_one,
+            actor=self.site_user,
+            category="Daily Fuel Readings",
+            object_label=f"{selected_date.isoformat()} / Day",
+            action="created",
+            after={"dip_litres": "100.00"},
+        )
+
+        response = self.client.get(
+            reverse("site-form-history", args=[self.site_one.slug, "book-in-fuel"]),
+            {"date": selected_date.isoformat(), "shift": "Day"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["events"].count(), 1)
+        self.assertContains(response, "TRUCK-A")
+        self.assertNotContains(response, "TRUCK-OLD")
+        self.assertNotContains(response, "Daily Fuel Readings")
+        self.assertContains(response, "Book IN Fuel history")
+
+    def test_site_history_excludes_hq_configuration_events(self):
+        self.client.force_login(self.site_user)
+        SiteAuditEvent.objects.create(
+            site=self.site_one,
+            actor=self.hq_user,
+            origin=SiteAuditEvent.Origin.HQ,
+            category="Tank",
+            object_label="HQ tank configuration",
+            action="changed",
+        )
+        SiteAuditEvent.objects.create(
+            site=self.site_one,
+            actor=self.site_user,
+            category="Book IN Fuel",
+            object_label="site delivery entry",
+            action="saved",
+        )
+
+        response = self.client.get(reverse("site-history", args=[self.site_one.slug]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["events"].count(), 1)
+        self.assertContains(response, "site delivery entry")
+        self.assertNotContains(response, "HQ tank configuration")
+
 
 class DailyFuelReadingWorkflowTests(TestCase):
     def setUp(self):
         self.site = Site.objects.create(name="Reading Site", shift_count=2)
         self.tank = Tank.objects.create(site=self.site, name="Tank 1", product="Diesel")
+        self.tank_two = Tank.objects.create(site=self.site, name="Tank 2", product="Petrol")
         self.nozzle = Nozzle.objects.create(tank=self.tank, name="Nozzle 1")
+        self.nozzle_two = Nozzle.objects.create(tank=self.tank_two, name="Nozzle 2")
         self.user = User.objects.create_user(username="reader", password="test-pass-123")
         UserProfile.objects.create(user=self.user, role=UserProfile.Role.SITE, site=self.site)
         self.client = Client()
         self.client.force_login(self.user)
         self.business_date = timezone.localdate() - timedelta(days=1)
 
+    def test_reading_form_has_three_tabs_with_the_current_form_selected(self):
+        response = self.client.get(
+            reverse("fuel-reading-entry", args=[self.site.slug, "tank-reading"]),
+            {"date": self.business_date.isoformat(), "shift": "Night"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Fuel Readings")
+        self.assertContains(response, 'aria-selected="true"')
+        for reading_type in ("tank-reading", "mechanical-readings", "electronic-readings"):
+            self.assertContains(response, reverse("fuel-reading-entry", args=[self.site.slug, reading_type]))
+
     def test_configured_shifts_drive_entry_and_reading_history(self):
-        selection_url = reverse("site-dashboard", args=[self.site.slug])
-        selection = self.client.get(selection_url, {"date": self.business_date.isoformat()})
-
-        self.assertEqual(selection.status_code, 200)
-        self.assertContains(selection, "Day")
-        self.assertContains(selection, "Night")
-        self.assertNotContains(selection, "Morning")
-        invalid_shift = self.client.get(selection_url, {
-            "date": self.business_date.isoformat(),
-            "shift": "Morning",
-        })
-        self.assertEqual(invalid_shift.status_code, 200)
-        self.assertNotContains(invalid_shift, f"/sites/{self.site.slug}/forms/")
-
-        entry_url = reverse("blank-site-form", args=[self.site.slug, "daily-fuel-readings"])
+        self.tank.capacity_litres = "25000.00"
+        self.tank.save(update_fields=["capacity_litres"])
         entry_query = {"date": self.business_date.isoformat(), "shift": "Night"}
-        entry_post_url = f"{entry_url}?date={self.business_date.isoformat()}&shift=Night"
-        entry_page = self.client.get(entry_url, entry_query)
-        self.assertEqual(entry_page.status_code, 200)
-        self.assertContains(entry_page, self.tank.name)
-        self.assertContains(entry_page, self.nozzle.name)
-        readings = {
+        dashboard = self.client.get(reverse("site-dashboard", args=[self.site.slug]), entry_query)
+        self.assertEqual(dashboard.status_code, 200)
+        for reading_type in ("tank-reading", "mechanical-readings", "electronic-readings"):
+            self.assertContains(dashboard, reverse("fuel-reading-entry", args=[self.site.slug, reading_type]))
+        self.assertEqual(
+            self.client.get(reverse("fuel-reading-entry", args=[self.site.slug, "tank-reading"]), {
+                "date": self.business_date.isoformat(),
+                "shift": "Morning",
+            }).status_code,
+            302,
+        )
+
+        tank_url = reverse("fuel-reading-entry", args=[self.site.slug, "tank-reading"])
+        tank_post_url = f"{tank_url}?date={self.business_date.isoformat()}&shift=Night"
+        tank_page = self.client.get(tank_url, entry_query)
+        self.assertContains(tank_page, self.tank.name)
+        self.assertContains(tank_page, self.tank_two.name)
+        self.assertContains(tank_page, "Tank capacity (L)")
+        self.assertContains(tank_page, 'value="25000.00" disabled')
+        self.assertContains(tank_page, "Depth (cm)")
+        self.assertNotContains(tank_page, self.nozzle.name)
+        self.assertEqual(self.client.post(tank_post_url, {
             "business_date": self.business_date.isoformat(),
             "shift_label": "Night",
             f"tank_{self.tank.pk}_dip": "1234.50",
+            f"tank_{self.tank.pk}_depth_cm": "112.25",
+            f"tank_{self.tank_two.pk}_dip": "987.65",
+            f"tank_{self.tank_two.pk}_depth_cm": "88.50",
+        }).status_code, 302)
+        tank_reading = TankDipReading.objects.get(daily_reading__site=self.site, daily_reading__business_date=self.business_date, tank=self.tank)
+        self.assertEqual(str(tank_reading.depth_cm), "112.25")
+        reopened_tank_page = self.client.get(tank_url, entry_query)
+        self.assertContains(reopened_tank_page, 'value="112.25"')
+
+        mechanical_url = reverse("fuel-reading-entry", args=[self.site.slug, "mechanical-readings"])
+        mechanical_post_url = f"{mechanical_url}?date={self.business_date.isoformat()}&shift=Night"
+        mechanical_page = self.client.get(mechanical_url, entry_query)
+        self.assertContains(mechanical_page, self.nozzle.name)
+        self.assertContains(mechanical_page, self.nozzle_two.name)
+        self.assertContains(mechanical_page, self.tank_two.name)
+        self.assertEqual(self.client.post(mechanical_post_url, {
+            "business_date": self.business_date.isoformat(),
+            "shift_label": "Night",
             f"nozzle_{self.nozzle.pk}_mechanical": "234.56",
+            f"nozzle_{self.nozzle_two.pk}_mechanical": "456.78",
+        }).status_code, 302)
+
+        electronic_url = reverse("fuel-reading-entry", args=[self.site.slug, "electronic-readings"])
+        electronic_post_url = f"{electronic_url}?date={self.business_date.isoformat()}&shift=Night"
+        electronic_page = self.client.get(electronic_url, entry_query)
+        self.assertContains(electronic_page, self.nozzle.name)
+        self.assertContains(electronic_page, self.nozzle_two.name)
+        self.assertEqual(self.client.post(electronic_post_url, {
+            "business_date": self.business_date.isoformat(),
+            "shift_label": "Night",
             f"nozzle_{self.nozzle.pk}_electronic": "345.67",
-        }
-        self.assertEqual(self.client.post(entry_post_url, readings).status_code, 302)
+            f"nozzle_{self.nozzle_two.pk}_electronic": "567.89",
+        }).status_code, 302)
 
         reading = DailyFuelReading.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
         self.assertEqual(str(TankDipReading.objects.get(daily_reading=reading, tank=self.tank).dip_litres), "1234.50")
+        self.assertEqual(str(TankDipReading.objects.get(daily_reading=reading, tank=self.tank_two).dip_litres), "987.65")
         nozzle_reading = NozzleFuelReading.objects.get(daily_reading=reading, nozzle=self.nozzle)
         self.assertEqual(str(nozzle_reading.mechanical_reading), "234.56")
         self.assertEqual(str(nozzle_reading.electronic_reading), "345.67")
-        created_event = self.site.audit_events.get(category="Daily Fuel Readings", action="created")
-        self.assertEqual(created_event.actor, self.user)
+        self.assertEqual(self.site.audit_events.filter(category="Tank Reading").count(), 1)
+        self.assertEqual(self.site.audit_events.filter(category="Mechanical Readings").count(), 1)
+        self.assertEqual(self.site.audit_events.filter(category="Electronic Readings").count(), 1)
+        for reading_type, label in (("tank-reading", "Tank Reading"), ("mechanical-readings", "Mechanical Readings"), ("electronic-readings", "Electronic Readings")):
+            history = self.client.get(reverse("site-form-history", args=[self.site.slug, reading_type]), entry_query)
+            self.assertContains(history, f"{label} history")
+            self.assertEqual(history.context["events"].count(), 1)
 
-        readings[f"tank_{self.tank.pk}_dip"] = "1200.00"
-        self.assertEqual(self.client.post(entry_post_url, readings).status_code, 302)
-        updated_event = self.site.audit_events.get(category="Daily Fuel Readings", action="updated")
-        self.assertEqual(updated_event.before["tanks"][str(self.tank.pk)]["dip_litres"], "1234.50")
-        self.assertEqual(updated_event.after["tanks"][str(self.tank.pk)]["dip_litres"], "1200.00")
-        self.assertContains(self.client.get(reverse("site-history", args=[self.site.slug])), "Daily Fuel Readings")
+    def test_mechanical_and_electronic_nozzles_are_globally_numeric_sorted(self):
+        Nozzle.objects.create(tank=self.tank, name="Nozzle 10")
+        Nozzle.objects.create(tank=self.tank_two, name="Nozzle 3")
+        for reading_type in ("mechanical-readings", "electronic-readings"):
+            response = self.client.get(
+                reverse("fuel-reading-entry", args=[self.site.slug, reading_type]),
+                {"date": self.business_date.isoformat(), "shift": "Night"},
+            )
+            html = response.content.decode()
+            positions = [html.index(f">{name}</td>") for name in ("Nozzle 1", "Nozzle 2", "Nozzle 3", "Nozzle 10")]
+            self.assertEqual(positions, sorted(positions))

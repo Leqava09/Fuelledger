@@ -4,6 +4,10 @@
 {% block content %}
 <div class="page-heading">
     <div><div class="eyebrow">SITE</div><h1>{{ site.name }}</h1><p class="subheading">Site setup</p></div>
+    <div class="heading-actions">
+        <a class="button secondary" href="{% url 'site-history' site.slug %}">History</a>
+        {% if can_manage_users %}<a class="button secondary" href="{% url 'site-users' site.slug %}">Users and groups</a>{% endif %}
+    </div>
 </div>
 <div class="metric-strip">
     <div class="metric"><span>Tanks</span><strong>{{ tank_count }}</strong><small>configured at this site</small></div>
@@ -28,6 +32,10 @@
             <a class="button primary" href="{% url 'blank-site-form' site.slug form_key %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ selected_shift|urlencode }}">{{ form_label }} <span aria-hidden="true">→</span></a>
             {% endfor %}
         </div>
+        <section class="fuel-reading-section" aria-labelledby="fuel-reading-heading">
+            <div class="section-heading"><h2 id="fuel-reading-heading">Fuel Readings</h2></div>
+            {% include "ledger/fuel_reading_tabs.html" %}
+        </section>
         {% else %}
         <div class="section-heading"><h2>Select a shift for {{ selected_date|date:"d M Y" }}</h2></div>
         <form class="selection-form" method="get">
@@ -43,12 +51,6 @@
         </form>
         {% endif %}
     </div>
-    <nav class="site-tools" aria-label="Site records and management">
-        <a class="button secondary" href="{% url 'site-history' site.slug %}">History</a>
-        {% if can_manage_users %}
-        <a class="button secondary" href="{% url 'site-users' site.slug %}">Users and groups</a>
-        {% endif %}
-    </nav>
 </section>
 {% endblock %}
 {% block extra_js %}<script src="{% static 'js/site_date_picker.js' %}" defer></script>{% endblock %}

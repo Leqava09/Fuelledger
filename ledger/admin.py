@@ -1,5 +1,6 @@
 from django import forms
 from django.contrib import admin
+from django.contrib.admin.widgets import FilteredSelectMultiple
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.models import User
 import nested_admin
@@ -18,6 +19,7 @@ from .models import (
 	Tank,
 	TankDipReading,
 	UserProfile,
+	SITE_FORM_PERMISSION_CHOICES,
 )
 
 
@@ -25,6 +27,7 @@ def _record_admin_audit(site, user, category, label, action, before=None, after=
 	SiteAuditEvent.objects.create(
 		site=site,
 		actor=user,
+		origin=SiteAuditEvent.Origin.HQ,
 		category=category,
 		object_label=label,
 		action=action,
@@ -58,10 +61,11 @@ def _record_site_inline_changes(request, site, formset):
 class TankInlineForm(forms.ModelForm):
 	class Meta:
 		model = Tank
-		fields = ("name", "product")
+		fields = ("name", "product", "capacity_litres")
 		widgets = {
 			"name": forms.TextInput(attrs={"size": 14, "style": "width: 145px; max-width: 100%;"}),
 			"product": forms.TextInput(attrs={"size": 17, "style": "width: 170px; max-width: 100%;"}),
+			"capacity_litres": forms.NumberInput(attrs={"min": "0", "step": "0.01", "style": "width: 120px; max-width: 100%;"}),
 		}
 
 
@@ -88,11 +92,25 @@ class SpeedPointInlineForm(forms.ModelForm):
 		}
 
 
+class UserProfileAdminForm(forms.ModelForm):
+	form_permissions = forms.MultipleChoiceField(
+		choices=SITE_FORM_PERMISSION_CHOICES,
+		label="Site form permissions",
+		required=False,
+		widget=FilteredSelectMultiple("site form permissions", False),
+	)
+
+	class Meta:
+		model = UserProfile
+		fields = "__all__"
+
+
 class UserProfileInline(admin.StackedInline):
 	model = UserProfile
+	form = UserProfileAdminForm
 	extra = 0
 	max_num = 1
-	fields = ("role", "site", "can_configure", "can_manage_users")
+	fields = ("role", "site", "form_permissions", "can_configure", "can_manage_users")
 	verbose_name = "FuelLedger access"
 	verbose_name_plural = "FuelLedger permissions"
 
@@ -113,7 +131,12 @@ class FuelLedgerUserAdmin(UserAdmin):
 				"Site user",
 				form.instance.username,
 				"changed" if change else "created",
-				after={"role": profile.role, "can_configure": profile.can_configure, "can_manage_users": profile.can_manage_users},
+				after={
+					"role": profile.role,
+					"form_permissions": profile.form_permissions,
+					"can_configure": profile.can_configure,
+					"can_manage_users": profile.can_manage_users,
+				},
 			)
 
 
@@ -132,7 +155,7 @@ class TankInline(nested_admin.NestedStackedInline):
 	inlines = (NozzleInline,)
 	classes = ("fuel-tanks-inline",)
 	extra = 0
-	fields = ("name", "product")
+	fields = ("name", "product", "capacity_litres")
 	verbose_name = " "
 	verbose_name_plural = "Tanks"
 
@@ -221,7 +244,12 @@ admin.site.register(FuelBooking)
 admin.site.register(DailyFuelReading)
 admin.site.register(TankDipReading)
 admin.site.register(NozzleFuelReading)
-admin.site.register(SiteAuditEvent)
+@admin.register(SiteAuditEvent)
+class SiteAuditEventAdmin(admin.ModelAdmin):
+	list_display = ("site", "origin", "actor", "category", "object_label", "action", "created_at")
+	list_filter = ("origin", "category", "action")
+	search_fields = ("site__name", "actor__username", "category", "object_label")
+	readonly_fields = ("site", "origin", "actor", "category", "object_label", "action", "before", "after", "created_at")
 admin.site.register(SiteGroup)
 admin.site.site_header = "FuelLedger administration"
 admin.site.site_title = "FuelLedger"

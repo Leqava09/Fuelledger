@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Edit site group | {{ site.name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'grappelli/stylesheets/screen.css' %}">
+{{ form.media }}
+{% endblock %}
+{% block content %}
+<div class="page-heading compact-heading">
+    <div><div class="eyebrow"><a href="{% url 'site-groups' site.slug %}">{{ site.name }} / GROUPS</a></div><h1>Edit group: {{ group.name }}</h1></div>
+    <a class="button secondary" href="{% url 'site-history' site.slug %}">History</a>
+</div>
+<form class="site-user-admin-form" method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="form-error">{{ form.non_field_errors }}</div>{% endif %}
+    <fieldset class="grp-module">
+        <h2>Group details</h2>
+        <div class="grp-row">{{ form.name.label_tag }}{{ form.name }}{{ form.name.errors }}</div>
+    </fieldset>
+    <fieldset class="grp-module">
+        <h2>Site members</h2>
+        <div class="grp-row">{{ form.users.label_tag }}{{ form.users }}{{ form.users.errors }}</div>
+    </fieldset>
+    <fieldset class="grp-module">
+        <h2>Granted site permissions</h2>
+        <div class="grp-row">{{ form.form_permissions.label_tag }}{{ form.form_permissions }}{{ form.form_permissions.errors }}</div>
+    </fieldset>
+    <div class="form-actions">
+        <a class="button secondary" href="{% url 'site-groups' site.slug %}">Cancel</a>
+        <button class="button primary" type="submit">Save group</button>
+    </div>
+</form>
+{% endblock %}
