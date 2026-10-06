@@ -7,10 +7,12 @@ from .models import SiteGroup
 
 class BookInFuelForm(forms.Form):
 	business_date = forms.DateField(widget=forms.HiddenInput)
+	shift_label = forms.ChoiceField(widget=forms.HiddenInput)
 
-	def __init__(self, tanks, *args, initial_quantities=None, **kwargs):
+	def __init__(self, tanks, site, *args, initial_quantities=None, **kwargs):
 		super().__init__(*args, **kwargs)
 		self.tanks = list(tanks)
+		self.fields["shift_label"].choices = [(label, label) for label in site.get_shift_names()]
 		self.tank_fields = []
 		initial_quantities = initial_quantities or {}
 		for tank in self.tanks:

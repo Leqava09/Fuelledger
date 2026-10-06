@@ -17,12 +17,30 @@
         </div>
     </form>
     <div class="form-launcher">
-        <div class="section-heading"><h2>Forms for {{ selected_date|date:"d M Y" }}</h2></div>
+        {% if selected_shift %}
+        <div class="section-heading">
+            <h2>{{ selected_shift }} shift forms for {{ selected_date|date:"d M Y" }}</h2>
+            <a class="table-link" href="?date={{ selected_date|date:'Y-m-d' }}">Change shift</a>
+        </div>
         <div class="form-launcher-buttons">
             {% for form_key, form_label in site_forms.items %}
-            <a class="button primary" href="{% url 'blank-site-form' site.slug form_key %}?date={{ selected_date|date:'Y-m-d' }}">{{ form_label }} <span aria-hidden="true">→</span></a>
+            <a class="button primary" href="{% url 'blank-site-form' site.slug form_key %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ selected_shift|urlencode }}">{{ form_label }} <span aria-hidden="true">→</span></a>
             {% endfor %}
         </div>
+        {% else %}
+        <div class="section-heading"><h2>Select a shift for {{ selected_date|date:"d M Y" }}</h2></div>
+        <form class="selection-form" method="get">
+            <input type="hidden" name="date" value="{{ selected_date|date:'Y-m-d' }}">
+            <div class="form-row">
+                <label for="site-shift">Shift</label>
+                <select id="site-shift" name="shift" required>
+                    <option value="">Select shift</option>
+                    {% for shift_name in shift_names %}<option value="{{ shift_name }}">{{ shift_name }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="form-actions"><button class="button primary" type="submit">Continue</button></div>
+        </form>
+        {% endif %}
     </div>
     <nav class="site-tools" aria-label="Site records and management">
         <a class="button secondary" href="{% url 'site-history' site.slug %}">History</a>

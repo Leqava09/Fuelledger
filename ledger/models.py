@@ -94,6 +94,7 @@ class FuelBooking(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="fuel_bookings")
 	tank = models.ForeignKey(Tank, on_delete=models.PROTECT, related_name="fuel_bookings")
 	business_date = models.DateField()
+	shift_label = models.CharField(max_length=30)
 	qty_litres = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="Qty L booked in")
 	created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="fuel_bookings")
 	created_at = models.DateTimeField(auto_now_add=True)
@@ -102,12 +103,14 @@ class FuelBooking(models.Model):
 	class Meta:
 		ordering = ["-business_date", "tank__name"]
 		constraints = [
-			models.UniqueConstraint(fields=["site", "tank", "business_date"], name="unique_fuel_booking_per_site_tank_date"),
+			models.UniqueConstraint(fields=["site", "tank", "business_date", "shift_label"], name="unique_fuel_booking_per_site_tank_date_shift"),
 		]
 
 	def clean(self):
 		if self.site_id and self.tank_id and self.tank.site_id != self.site_id:
 			raise ValidationError({"tank": "The selected tank must belong to this site."})
+		if self.site_id and self.shift_label not in self.site.get_shift_names():
+			raise ValidationError({"shift_label": "Select a shift configured for this site."})
 
 	def __str__(self):
 		return f"{self.site} / {self.tank} / {self.business_date}"

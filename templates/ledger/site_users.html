@@ -4,6 +4,7 @@
 <div class="page-heading">
     <div><div class="eyebrow"><a href="{% url 'site-dashboard' site.slug %}">{{ site.name }}</a> / SITE ACCESS</div><h1>Users and groups</h1></div>
     <div class="heading-actions">
+        <a class="button secondary" href="{% url 'site-history' site.slug %}">History</a>
         <a class="button secondary" href="{% url 'site-groups' site.slug %}">Manage groups</a>
         <a class="button primary" href="{% url 'site-user-create' site.slug %}">Add user</a>
     </div>

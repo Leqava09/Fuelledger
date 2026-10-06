@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Add site user | {{ site.name }}{% endblock %}
 {% block content %}
-<div class="page-heading compact-heading"><div><div class="eyebrow"><a href="{% url 'site-users' site.slug %}">{{ site.name }} / USERS</a></div><h1>Add site user</h1></div></div>
+<div class="page-heading compact-heading"><div><div class="eyebrow"><a href="{% url 'site-users' site.slug %}">{{ site.name }} / USERS</a></div><h1>Add site user</h1></div><a class="button secondary" href="{% url 'site-history' site.slug %}">History</a></div>
 <form class="entry-form" method="post">
     {% csrf_token %}
     {% if form.non_field_errors %}<div class="form-error">{{ form.non_field_errors }}</div>{% endif %}

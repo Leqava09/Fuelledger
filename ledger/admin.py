@@ -186,27 +186,6 @@ class SiteAdmin(nested_admin.NestedModelAdmin):
 		for formset in formsets:
 			_record_site_inline_changes(request, form.instance, formset)
 
-	def save_model(self, request, obj, form, change):
-		before = {}
-		if change:
-			original = Site.objects.get(pk=obj.pk)
-			before = {
-				name: str(getattr(original, name))
-				for name in ("name", "address", "contact_number", "contact_email", "manager_name", "shift_count", "is_active")
-			}
-		super().save_model(request, obj, form, change)
-		after = {
-			name: str(getattr(obj, name))
-			for name in ("name", "address", "contact_number", "contact_email", "manager_name", "shift_count", "is_active")
-		}
-		if not change or form.changed_data:
-			_record_admin_audit(obj, request.user, "Site", obj.name, "changed" if change else "created", before, after)
-
-	def save_related(self, request, form, formsets, change):
-		super().save_related(request, form, formsets, change)
-		for formset in formsets:
-			_record_formset_audit(request, form.instance, formset)
-
 	class Media:
 		css = {"all": ("css/site_shift_selector.css",)}
 		js = ("js/site_shift_selector.js",)

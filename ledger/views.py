@@ -9,7 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.contrib.auth.models import User
 
-from .forms import BookInFuelForm, DailyFuelReadingForm, ShiftSelectionForm, SiteGroupForm, SiteUserCreateForm
+from .forms import BookInFuelForm, DailyFuelReadingForm, SiteGroupForm, SiteUserCreateForm
 from .models import (
 	DailyFuelReading,
 	FuelBooking,
@@ -92,12 +92,17 @@ def hq_dashboard(request):
 def site_dashboard(request, slug):
 	site = request.current_site
 	selected_date, today = _selected_business_date(request)
+	selected_shift = request.GET.get("shift", "")
+	if selected_shift not in site.get_shift_names():
+		selected_shift = ""
 	return render(request, "ledger/site_dashboard.html", {
 		"site": site,
 		"tank_count": site.tanks.count(),
 		"speed_point_count": site.speed_points.count(),
 		"selected_date": selected_date,
 		"today": today,
+		"shift_names": site.get_shift_names(),
+		"selected_shift": selected_shift,
 		"site_forms": SITE_FORM_LABELS,
 		"can_manage_users": _can_manage_site_users(request.user, site),
 		"history_count": site.audit_events.count(),
@@ -110,28 +115,34 @@ def blank_site_form(request, slug, form_key):
 	if label is None:
 		raise Http404
 	selected_date, today = _selected_business_date(request)
+	site = request.current_site
+	shift_label = request.POST.get("shift_label") or request.GET.get("shift", "")
+	if shift_label not in site.get_shift_names():
+		return redirect(f"{reverse('site-dashboard', args=[site.slug])}?date={selected_date.isoformat()}")
 	if form_key == "book-in-fuel":
-		return _book_in_fuel(request, label, selected_date, today)
+		return _book_in_fuel(request, label, selected_date, today, shift_label)
 	if form_key == "daily-fuel-readings":
-		return _daily_fuel_shift_selection(request, label, selected_date)
+		return daily_fuel_reading_entry(request, slug)
 	return render(request, "ledger/blank_site_form.html", {
-		"site": request.current_site,
+		"site": site,
 		"form_label": label,
 		"selected_date": selected_date,
+		"shift_label": shift_label,
 	})
 
 
-def _book_in_fuel(request, label, selected_date, today):
+def _book_in_fuel(request, label, selected_date, today, shift_label):
 	site = request.current_site
 	tanks = list(site.tanks.order_by("name"))
 	bookings = {
 		booking.tank_id: booking
-		for booking in FuelBooking.objects.filter(site=site, business_date=selected_date)
+		for booking in FuelBooking.objects.filter(site=site, business_date=selected_date, shift_label=shift_label)
 	}
 	form = BookInFuelForm(
 		tanks,
+		site,
 		data=request.POST if request.method == "POST" else None,
-		initial={"business_date": selected_date},
+		initial={"business_date": selected_date, "shift_label": shift_label},
 		initial_quantities={tank_id: booking.qty_litres for tank_id, booking in bookings.items()},
 	)
 	if request.method == "POST" and form.is_valid():
@@ -153,49 +164,29 @@ def _book_in_fuel(request, label, selected_date, today):
 						site=site,
 						tank=tank,
 						business_date=form.cleaned_data["business_date"],
+						shift_label=form.cleaned_data["shift_label"],
 						defaults={"qty_litres": quantity, "created_by": request.user},
 					)
 			_record_audit(
-				site, request.user, "Book IN Fuel", selected_date.isoformat(), "saved",
+				site, request.user, "Book IN Fuel", f"{selected_date.isoformat()} / {shift_label}", "saved",
 				before=before,
 				after={str(tank.pk): str(quantity) for tank, quantity in quantities},
 			)
 			messages.success(request, "Fuel book-in quantities saved.")
 			return redirect(
 				f"{reverse('blank-site-form', args=[site.slug, 'book-in-fuel'])}"
-				f"?date={form.cleaned_data['business_date'].isoformat()}"
+				f"?date={form.cleaned_data['business_date'].isoformat()}&shift={shift_label}"
 			)
 	tank_rows = [(tank, form[field_name]) for tank, field_name in form.tank_fields]
 	return render(request, "ledger/book_in_fuel.html", {
 		"site": site,
 		"form_label": label,
 		"selected_date": selected_date,
+		"shift_label": shift_label,
 		"today": today,
 		"form": form,
 		"tank_rows": tank_rows,
 	})
-
-
-def _daily_fuel_shift_selection(request, label, selected_date):
-	site = request.current_site
-	form = ShiftSelectionForm(
-		site,
-		data=request.POST if request.method == "POST" else None,
-		initial={"business_date": selected_date},
-	)
-	if request.method == "POST" and form.is_valid():
-		return redirect(
-			f"{reverse('daily-fuel-reading-entry', args=[site.slug])}"
-			f"?date={form.cleaned_data['business_date'].isoformat()}"
-			f"&shift={form.cleaned_data['shift_label']}"
-		)
-	return render(request, "ledger/daily_fuel_shift.html", {
-		"site": site,
-		"form_label": label,
-		"selected_date": selected_date,
-		"form": form,
-	})
-
 
 @login_required
 def daily_fuel_reading_entry(request, slug):
@@ -204,7 +195,7 @@ def daily_fuel_reading_entry(request, slug):
 	shift_label = request.POST.get("shift_label") or request.GET.get("shift", "")
 	if shift_label not in site.get_shift_names():
 		return redirect(
-			f"{reverse('blank-site-form', args=[site.slug, 'daily-fuel-readings'])}"
+			f"{reverse('site-dashboard', args=[site.slug])}"
 			f"?date={selected_date.isoformat()}"
 		)
 	tanks = list(site.tanks.prefetch_related("nozzles").order_by("name"))
