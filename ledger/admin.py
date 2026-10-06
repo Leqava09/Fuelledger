@@ -6,7 +6,9 @@ import nested_admin
 
 from .models import (
 	DailyFuelReading,
+	CashUpAdditional,
 	FuelBooking,
+	ManualShopPoint,
 	Nozzle,
 	NozzleFuelReading,
 	Site,
@@ -135,14 +137,33 @@ class TankInline(nested_admin.NestedStackedInline):
 	verbose_name_plural = "Tanks"
 
 
-class SpeedPointInline(nested_admin.NestedTabularInline):
+class EFTDrivewayInline(nested_admin.NestedTabularInline):
 	model = SpeedPoint
 	form = SpeedPointInlineForm
 	extra = 0
-	classes = ("fuel-speed-points-inline",)
+	classes = ("fuel-eft-driveway-inline",)
 	fields = ("point_id", "serial_number")
-	verbose_name = "Speed point"
-	verbose_name_plural = "Speed points"
+	verbose_name = "EFT/Driveway"
+	verbose_name_plural = "EFT/Driveway"
+
+
+class ManualShopPointInline(nested_admin.NestedTabularInline):
+	model = ManualShopPoint
+	form = SpeedPointInlineForm
+	extra = 0
+	classes = ("fuel-manual-shop-inline",)
+	fields = ("point_id", "serial_number")
+	verbose_name = "Manual/Shop"
+	verbose_name_plural = "Manual/Shop"
+
+
+class CashUpAdditionalInline(nested_admin.NestedTabularInline):
+	model = CashUpAdditional
+	extra = 0
+	classes = ("fuel-cash-up-additional-inline",)
+	fields = ("additional_field",)
+	verbose_name = "Cash up additional"
+	verbose_name_plural = "Cash up additional"
 
 
 class SiteAdminForm(forms.ModelForm):
@@ -151,6 +172,7 @@ class SiteAdminForm(forms.ModelForm):
 		fields = "__all__"
 		widgets = {
 			"name": forms.TextInput(attrs={"style": "width: 50%; max-width: 260px; min-width: 120px;"}),
+			"currency": forms.TextInput(attrs={"style": "width: 6ch; max-width: 100%;"}),
 			"manager_name": forms.TextInput(attrs={"style": "width: 50%; max-width: 260px; min-width: 120px;"}),
 			"contact_number": forms.TextInput(attrs={"style": "width: 50%; max-width: 260px; min-width: 120px;"}),
 			"contact_email": forms.EmailInput(attrs={"style": "width: 50%; max-width: 260px; min-width: 120px;"}),
@@ -159,12 +181,13 @@ class SiteAdminForm(forms.ModelForm):
 
 class SiteAdmin(nested_admin.NestedModelAdmin):
 	form = SiteAdminForm
-	inlines = (TankInline, SpeedPointInline)
-	list_display = ("name", "manager_name", "contact_number", "contact_email", "is_active")
-	search_fields = ("name", "address", "contact_email", "contact_number", "manager_name")
+	change_form_template = "admin/ledger/site/change_form.html"
+	inlines = (TankInline, EFTDrivewayInline, ManualShopPointInline, CashUpAdditionalInline)
+	list_display = ("name", "currency", "manager_name", "contact_number", "contact_email", "is_active")
+	search_fields = ("name", "currency", "address", "contact_email", "contact_number", "manager_name")
 	list_filter = ("is_active",)
 	fieldsets = (
-		("Site details", {"fields": ("name", "is_active")}),
+		("Site details", {"fields": ("name", "currency", "is_active")}),
 		("Contact Details", {"fields": ("manager_name", "contact_number", "contact_email")}),
 		("Shifts", {"fields": ("shift_count",)}),
 		("Address", {"fields": ("address",)}),
@@ -174,10 +197,10 @@ class SiteAdmin(nested_admin.NestedModelAdmin):
 		before = {}
 		if change:
 			original = Site.objects.get(pk=obj.pk)
-			tracked_fields = ("name", "address", "contact_number", "contact_email", "manager_name", "shift_count", "is_active")
+			tracked_fields = ("name", "currency", "address", "contact_number", "contact_email", "manager_name", "shift_count", "is_active")
 			before = {name: str(getattr(original, name)) for name in tracked_fields}
 		super().save_model(request, obj, form, change)
-		after = {name: str(getattr(obj, name)) for name in ("name", "address", "contact_number", "contact_email", "manager_name", "shift_count", "is_active")}
+		after = {name: str(getattr(obj, name)) for name in ("name", "currency", "address", "contact_number", "contact_email", "manager_name", "shift_count", "is_active")}
 		if not change or form.changed_data:
 			_record_admin_audit(obj, request.user, "Site", obj.name, "changed" if change else "created", before, after)
 

@@ -11,11 +11,13 @@ from django.urls import reverse
 from django.utils import timezone
 
 from ledger.calculations import FormulaError, calculate_values, validate_formula
-from ledger.admin import NozzleInlineForm, SiteAdmin, SiteAdminForm, SpeedPointInline, SpeedPointInlineForm, TankInlineForm
+from ledger.admin import CashUpAdditionalInline, EFTDrivewayInline, ManualShopPointInline, NozzleInlineForm, SiteAdmin, SiteAdminForm, SpeedPointInlineForm, TankInlineForm
 from ledger.models import (
+    CashUpAdditional,
     CashUpField,
     DailyFuelReading,
     FuelBooking,
+    ManualShopPoint,
     Nozzle,
     NozzleFuelReading,
     Site,
@@ -57,24 +59,65 @@ class SiteConfigurationAdminTests(TestCase):
         self.assertContains(response, "Address")
         self.assertContains(response, "Contact email")
         self.assertContains(response, "Contact Number")
+        self.assertContains(response, "Currency")
         self.assertContains(response, "Manager name")
         self.assertContains(response, "Site Name")
         self.assertContains(response, "Amount of shifts")
         self.assertContains(response, "Tanks")
         self.assertContains(response, "Nozzles")
-        self.assertContains(response, "Speed points")
-        self.assertContains(response, "Speed point no/ID")
-        self.assertContains(response, "Speed point Serial No")
+        self.assertContains(response, "EFT/Driveway")
+        self.assertContains(response, "EFT/Driveway no/ID")
+        self.assertContains(response, "EFT/Driveway Serial No")
+        self.assertContains(response, "Manual/Shop")
+        self.assertContains(response, "Manual/Shop no/ID")
+        self.assertContains(response, "Manual/Shop Serial No")
+        self.assertContains(response, "Cash up additional")
         self.assertContains(response, "nested_admin")
         self.assertContains(response, "site_shift_selector.js")
         self.assertContains(response, "fuel-tanks-inline")
-        self.assertContains(response, "fuel-speed-points-inline")
+        self.assertContains(response, "fuel-eft-driveway-inline")
+        self.assertContains(response, "fuel-manual-shop-inline")
+        self.assertContains(response, "fuel-cash-up-additional-inline")
         html = response.content.decode()
         self.assertNotIn('id="id_slug"', html)
         field_positions = [html.index(f'id="id_{field}"') for field in ("manager_name", "contact_number", "contact_email", "address")]
         self.assertEqual(field_positions, sorted(field_positions))
         for field_name in ("name", "manager_name", "contact_number", "contact_email"):
             self.assertIn("width: 50%", html[html.index(f'id="id_{field_name}"') - 300:html.index(f'id="id_{field_name}"') + 300])
+
+    def test_site_registration_contains_currency_and_cash_up_additional_inline(self):
+        admin_user = User.objects.create_superuser(username="currency-admin", password="test-pass-123", email="currency-admin@example.com")
+        client = Client()
+        client.force_login(admin_user)
+
+        response = client.get(reverse("admin:ledger_site_add"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Currency")
+        self.assertContains(response, "Cash up additional")
+        self.assertEqual(SiteAdmin.fieldsets[-1][0], "Address")
+        self.assertEqual(SiteAdminForm().fields["currency"].max_length, 5)
+        self.assertEqual(SiteAdminForm().fields["currency"].required, False)
+        self.assertEqual(SiteAdminForm().fields["currency"].widget.attrs["style"], "width: 6ch; max-width: 100%;")
+        self.assertIsNone(CashUpAdditionalInline.max_num)
+        self.assertEqual(CashUpAdditionalInline.extra, 0)
+        self.assertEqual(CashUpAdditionalInline.fields, ("additional_field",))
+        self.assertEqual(CashUpAdditional._meta.get_field("additional_field").max_length, 30)
+        self.assertIn("currency", SiteAdmin.list_display)
+        html = response.content.decode()
+        self.assertLess(html.index("Cash up additional"), html.index('id="id_address"'))
+        self.assertLess(html.index("Manual/Shop"), html.index("Cash up additional"))
+        self.assertIn("Add another Cash up additional", html)
+        site = Site.objects.create(name="Additional Fields Site")
+        CashUpAdditional.objects.create(site=site, additional_field="Till variance")
+        CashUpAdditional.objects.create(site=site, additional_field="Manager note")
+        self.assertEqual(site.cash_up_additional_fields.count(), 2)
+        inline_formset = next(
+            inline.formset
+            for inline in response.context["inline_admin_formsets"]
+            if inline.opts.model is CashUpAdditional
+        )
+        self.assertEqual(len(inline_formset.forms), 0)
 
     def test_speed_point_is_attached_to_its_site(self):
         site = Site.objects.create(name="Speed Point Test")
@@ -90,8 +133,17 @@ class SiteConfigurationAdminTests(TestCase):
         self.assertEqual(form.fields["point_id"].widget.attrs["size"], 10)
         self.assertEqual(form.fields["serial_number"].max_length, 30)
         self.assertEqual(form.fields["serial_number"].widget.attrs["size"], 30)
-        self.assertEqual(SpeedPointInline.extra, 0)
-        self.assertEqual(SpeedPointInline.fields, ("point_id", "serial_number"))
+        self.assertEqual(EFTDrivewayInline.extra, 0)
+        self.assertEqual(EFTDrivewayInline.fields, ("point_id", "serial_number"))
+        self.assertEqual(ManualShopPointInline.extra, 0)
+        self.assertEqual(ManualShopPointInline.fields, ("point_id", "serial_number"))
+
+    def test_manual_shop_points_use_the_same_site_scoped_fields(self):
+        site = Site.objects.create(name="Manual Shop Test")
+        point = ManualShopPoint.objects.create(site=site, point_id="MS-1", serial_number="MAN-001")
+
+        self.assertEqual(site.manual_shop_points.get(), point)
+        self.assertEqual(str(point), "MS-1")
 
     def test_site_shift_names_match_selected_shift_count(self):
         site = Site.objects.create(name="Shift Test Site")
@@ -181,10 +233,13 @@ class SiteAccessTests(TestCase):
     def test_hq_user_can_open_hq_and_any_site(self):
         self.client.force_login(self.hq_user)
 
+        self.site_two.currency = "ZAR"
+        self.site_two.save(update_fields=["currency"])
         self.assertEqual(self.client.get(reverse("hq-dashboard")).status_code, 200)
         response = self.client.get(reverse("site-dashboard", args=[self.site_two.slug]))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, reverse("hq-dashboard"))
+        self.assertContains(self.client.get(reverse("hq-dashboard")), "ZAR")
 
     def test_retired_cashup_form_builder_is_not_available(self):
         self.site_user.fuel_profile.can_configure = True

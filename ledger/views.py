@@ -99,6 +99,7 @@ def site_dashboard(request, slug):
 		"site": site,
 		"tank_count": site.tanks.count(),
 		"speed_point_count": site.speed_points.count(),
+		"manual_shop_count": site.manual_shop_points.count(),
 		"selected_date": selected_date,
 		"today": today,
 		"shift_names": site.get_shift_names(),

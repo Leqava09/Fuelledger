@@ -56,12 +56,5 @@
             renderShiftNames();
         }
 
-        const address = document.getElementById("id_address");
-        const inlineGroups = document.querySelectorAll(".fuel-tanks-inline, .fuel-speed-points-inline");
-        if (address && inlineGroups.length) {
-            const addressSection = address.closest(".grp-module") || address.closest("fieldset");
-            const lastInline = inlineGroups[inlineGroups.length - 1];
-            if (addressSection) lastInline.insertAdjacentElement("afterend", addressSection);
-        }
     });
 })();

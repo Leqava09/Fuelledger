@@ -13,6 +13,7 @@ class Site(models.Model):
 
 	name = models.CharField(max_length=120, unique=True, verbose_name="Site Name")
 	slug = models.SlugField(max_length=140, unique=True, blank=True)
+	currency = models.CharField(max_length=5, blank=True, default="", verbose_name="Currency")
 	address = models.TextField(blank=True, verbose_name="Address")
 	contact_number = models.CharField(max_length=30, blank=True, verbose_name="Contact Number")
 	contact_email = models.EmailField(blank=True)
@@ -42,6 +43,14 @@ class Site(models.Model):
 			2: ("Day", "Night"),
 			3: ("Morning", "Afternoon", "Evening"),
 		}[self.shift_count]
+
+
+class CashUpAdditional(models.Model):
+	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="cash_up_additional_fields")
+	additional_field = models.CharField(max_length=30, verbose_name="Cash up additional")
+
+	def __str__(self):
+		return self.additional_field
 
 
 class Tank(models.Model):
@@ -76,14 +85,30 @@ class Nozzle(models.Model):
 
 class SpeedPoint(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="speed_points")
-	point_id = models.CharField(max_length=10, verbose_name="Speed point no/ID")
-	serial_number = models.CharField(max_length=30, verbose_name="Speed point Serial No")
+	point_id = models.CharField(max_length=10, verbose_name="EFT/Driveway no/ID")
+	serial_number = models.CharField(max_length=30, verbose_name="EFT/Driveway Serial No")
 
 	class Meta:
 		ordering = ["point_id"]
 		constraints = [
 			models.UniqueConstraint(fields=["site", "point_id"], name="unique_speed_point_id_per_site"),
 			models.UniqueConstraint(fields=["site", "serial_number"], name="unique_speed_point_serial_per_site"),
+		]
+
+	def __str__(self):
+		return self.point_id
+
+
+class ManualShopPoint(models.Model):
+	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="manual_shop_points")
+	point_id = models.CharField(max_length=10, verbose_name="Manual/Shop no/ID")
+	serial_number = models.CharField(max_length=30, verbose_name="Manual/Shop Serial No")
+
+	class Meta:
+		ordering = ["point_id"]
+		constraints = [
+			models.UniqueConstraint(fields=["site", "point_id"], name="unique_manual_shop_point_id_per_site"),
+			models.UniqueConstraint(fields=["site", "serial_number"], name="unique_manual_shop_serial_per_site"),
 		]
 
 	def __str__(self):

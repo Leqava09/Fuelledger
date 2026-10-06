@@ -1,10 +1,5 @@
-good for now we have to create the daily fuel readings form 
-
-it needs to pull in the tanks and the relevant nozzles configred for the site
-
-I need to be able to enter the data for 
-machanical reading and electronic reading for the nozzles and for the tank the dip reading how ever we have to add to enter another layer between the date and the form we need to add select shift it must also be dynamic to the configered site because the same date might have 1/2/3 forms depending on the site
-
-also i need to have to be able to add users and groups in the site aswell just like i can in HQ in all the forms i want to be able to check the history like i can in site with the grappli i want to be able to trace everything everywhere
+cd "C:\Users\pekva\OneDrive - Goshen Food Solutions\Documents\Programming\FuelLedger"
+& "$HOME\.venv\Scripts\Activate.ps1"
+python manage.py runserver
 
 http://127.0.0.1:8000/admin/login/

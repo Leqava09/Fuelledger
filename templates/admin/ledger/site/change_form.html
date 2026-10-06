@@ -1,0 +1,18 @@
+{% extends "admin/change_form.html" %}
+
+{% block field_sets %}
+    {% for fieldset in adminform %}
+        {% if fieldset.name != "Address" %}
+            {% include "admin/includes/fieldset.html" %}
+        {% endif %}
+    {% endfor %}
+{% endblock %}
+
+{% block after_related_objects %}
+    {{ block.super }}
+    {% for fieldset in adminform %}
+        {% if fieldset.name == "Address" %}
+            {% include "admin/includes/fieldset.html" %}
+        {% endif %}
+    {% endfor %}
+{% endblock %}

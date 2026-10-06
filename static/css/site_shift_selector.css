@@ -35,6 +35,15 @@
     white-space: nowrap;
 }
 
+.fuel-tanks-inline .grp-collapse.grp-closed > h3.grp-collapse-handler {
+    display: flex !important;
+    align-items: center;
+    box-sizing: border-box;
+    min-height: 24px;
+    padding: 0 10px;
+    line-height: 1.2;
+}
+
 @media (max-width: 700px) {
     .shift-name-preview {
         display: flex;

@@ -12,7 +12,7 @@
         {% for site in sites %}
         <a class="site-row" href="{% url 'site-dashboard' site.slug %}">
             <span class="site-initial">{{ site.name|first|upper }}</span>
-            <span class="site-copy"><strong>{{ site.name }}</strong><small>Open site ledger</small></span>
+            <span class="site-copy"><strong>{{ site.name }}</strong><small>{% if site.currency %}{{ site.currency }} · {% endif %}Open site ledger</small></span>
             <span class="row-arrow" aria-hidden="true">→</span>
         </a>
         {% endfor %}
