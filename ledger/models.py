@@ -203,6 +203,7 @@ class UserProfile(models.Model):
 	user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="fuel_profile")
 	role = models.CharField(max_length=4, choices=Role.choices, default=Role.SITE)
 	site = models.ForeignKey(Site, on_delete=models.PROTECT, null=True, blank=True, related_name="users")
+	phone_number = models.CharField(max_length=30, blank=True, default="", verbose_name="Phone number")
 	can_configure = models.BooleanField(default=False, verbose_name="Can configure cash-up fields")
 	can_manage_users = models.BooleanField(default=False, verbose_name="Can manage site users and groups")
 	form_permissions = models.JSONField(default=default_site_form_permissions, blank=True)

@@ -1,0 +1,522 @@
+﻿python.exe : Creating test database for alias 'default' ('test_fuelledger')...
+At line:1 char:98
++ ... uelLedger"; & "$HOME\.venv\Scripts\python.exe" manage.py test ledger. ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Creating test d...fuelledger')... 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+Found 1 test(s).
+Operations to perform:
+  Synchronize unmigrated apps: grappelli, messages, nested_admin, staticfiles
+  Apply all migrations: admin, auth, contenttypes, ledger, sessions
+Synchronizing apps without migrations:
+  Creating tables...
+    Running deferred SQL...
+Running migrations:
+  Applying contenttypes.0001_initial... OK
+  Applying auth.0001_initial... OK
+  Applying admin.0001_initial... OK
+  Applying admin.0002_logentry_remove_auto_add... OK
+  Applying admin.0003_logentry_add_action_flag_choices... OK
+  Applying contenttypes.0002_remove_content_type_name... OK
+  Applying auth.0002_alter_permission_name_max_length... OK
+  Applying auth.0003_alter_user_email_max_length... OK
+  Applying auth.0004_alter_user_username_opts... OK
+  Applying auth.0005_alter_user_last_login_null... OK
+  Applying auth.0006_require_contenttypes_0002... OK
+  Applying auth.0007_alter_validators_add_error_messages... OK
+  Applying auth.0008_alter_user_username_max_length... OK
+  Applying auth.0009_alter_user_last_name_max_length... OK
+  Applying auth.0010_alter_group_name_max_length... OK
+  Applying auth.0011_update_proxy_permissions... OK
+  Applying auth.0012_alter_user_first_name_max_length... OK
+  Applying ledger.0001_initial... OK
+  Applying ledger.0002_site_address_site_contact_email_site_manager_name_and_more... OK
+  Applying ledger.0003_alter_tank_name_alter_tank_product... OK
+  Applying ledger.0004_site_contact_number_site_shift_count_and_more... OK
+  Applying ledger.0005_speedpoint... OK
+  Applying ledger.0006_alter_speedpoint_point_id_and_more... OK
+  Applying ledger.0007_fuelbooking... OK
+  Applying ledger.0008_userprofile_can_manage_users_dailyfuelreading_and_more... OK
+  Applying ledger.0009_fuelbooking_shift_label... OK
+  Applying ledger.0010_site_currency_cashupadditional... OK
+  Applying ledger.0011_alter_cashupadditional_site... OK
+  Applying ledger.0012_alter_speedpoint_point_id_and_more... OK
+  Applying ledger.0013_alter_fuelbooking_options_and_more... OK
+  Applying ledger.0014_alter_nozzlefuelreading_electronic_reading_and_more... OK
+  Applying ledger.0015_sitegroup_form_permissions_and_more... OK
+  Applying ledger.0016_siteauditevent_origin... OK
+  Applying ledger.0017_tank_capacity_litres_tankdipreading_depth_cm... OK
+  Applying ledger.0018_cashupshiftrecord... OK
+  Applying ledger.0019_site_image... OK
+  Applying ledger.0020_sitegroup_django_group... OK
+  Applying ledger.0021_fueltransfer... OK
+  Applying ledger.0022_userprofile_phone_number... OK
+test_hq_and_site_users_include_phone_number_field (ledger.tests.SiteConfigurati
+onAdminTests.test_hq_and_site_users_include_phone_number_field) ... FAIL
+
+======================================================================
+FAIL: test_hq_and_site_users_include_phone_number_field (ledger.tests.SiteConfi
+gurationAdminTests.test_hq_and_site_users_include_phone_number_field)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\pekva\OneDrive - Goshen Food 
+Solutions\Documents\Programming\FuelLedger\ledger\tests.py", line 146, in 
+test_hq_and_site_users_include_phone_number_field
+    self.assertContains(admin_response, "Phone number")
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : Couldn't find 'Phone number' in the 
+following response
+b'\n<!DOCTYPE html>\n\n<html lang="en-za" >\n<head>\n    <title>Change user | 
+FuelLedger administration</title>\n    <meta charset="utf-8" />\n    <meta 
+name="robots" content="NONE,NOARCHIVE" />\n    <!-- STYLESHEETS -->\n    \n    
+\n        <link href="/static/grappelli/jquery/ui/jquery-ui.min.css" 
+rel="stylesheet" type="text/css" media="screen" />\n        <link 
+href="/static/grappelli/stylesheets/screen.css" rel="stylesheet" 
+type="text/css" media="all" />\n        \n            <link 
+href="/static/grappelli/stylesheets/mueller/grid/output.css" rel="stylesheet" 
+type="text/css" media="screen" />\n        \n    \n\n    <!-- EXTRASTYLES 
+-->\n    \n    <!-- JAVASCRIPTS -->\n    \n    \n        <script 
+type="text/javascript">window.__admin_media_prefix__ = 
+"/static/grappelli/";</script>\n        <script 
+type="text/javascript">window.__admin_utc_offset__ = "7200";</script>\n        
+<script type="text/javascript" charset="utf-8">\n            // GLOBALS\n      
+      var grappelli = {},\n                ADMIN_URL = "/admin/",\n            
+    MODEL_URL_ARRAY = {"1": {"pk": 1, "app": "admin", "model": "logentry"}, 
+"2": {"pk": 2, "app": "auth", "model": "group"}, "3": {"pk": 3, "app": "auth", 
+"model": "permission"}, "4": {"pk": 4, "app": "auth", "model": "user"}, "5": 
+{"pk": 5, "app": "contenttypes", "model": "contenttype"}, "6": {"pk": 6, 
+"app": "sessions", "model": "session"}, "7": {"pk": 7, "app": "ledger", 
+"model": "cashupadditional"}, "8": {"pk": 8, "app": "ledger", "model": 
+"cashupfield"}, "9": {"pk": 9, "app": "ledger", "model": "cashupform"}, "10": 
+{"pk": 10, "app": "ledger", "model": "cashupshiftrecord"}, "11": {"pk": 11, 
+"app": "ledger", "model": "dailyfuelreading"}, "12": {"pk": 12, "app": 
+"ledger", "model": "fuelbooking"}, "13": {"pk": 13, "app": "ledger", "model": 
+"fueltransfer"}, "14": {"pk": 14, "app": "ledger", "model": 
+"manualshoppoint"}, "15": {"pk": 15, "app": "ledger", "model": "nozzle"}, 
+"16": {"pk": 16, "app": "ledger", "model": "nozzlefuelreading"}, "17": {"pk": 
+17, "app": "ledger", "model": "shiftentry"}, "18": {"pk": 18, "app": "ledger", 
+"model": "site"}, "19": {"pk": 19, "app": "ledger", "model": 
+"siteauditevent"}, "20": {"pk": 20, "app": "ledger", "model": "sitegroup"}, 
+"21": {"pk": 21, "app": "ledger", "model": "speedpoint"}, "22": {"pk": 22, 
+"app": "ledger", "model": "tank"}, "23": {"pk": 23, "app": "ledger", "model": 
+"tankdipreading"}, "24": {"pk": 24, "app": "ledger", "model": 
+"userprofile"}},\n                DATE_FORMAT = "%Y-%m-%d",\n                
+TIME_FORMAT = "%H:%M:%S",\n                DATETIME_FORMAT = "%Y-%m-%d 
+%H:%M:%S";\n        </script>\n        <!-- jQuery, jQuery-UI -->\n        
+<script src="/static/grappelli/jquery/jquery.min.js" 
+type="text/javascript"></script>\n        <script 
+src="/static/grappelli/jquery/jquery-migrate-3.0.1.min.js" 
+type="text/javascript"></script>\n        <script 
+src="/static/grappelli/jquery/ui/jquery-ui.min.js" 
+type="text/javascript"></script>\n        \n            <!-- Grappelli 
+Minified -->\n            <script src="/static/grappelli/js/grappelli.min.js" 
+type="text/javascript"></script>\n        \n        <script 
+type="text/javascript" charset="utf-8">\n            (function($) {\n          
+      $(document).ready(function() {\n                    $("#grp-navigation 
+.grp-collapse").grp_collapsible();\n                });\n            
+})(grp.jQuery);\n        </script>\n    \n    \n    <script 
+type="text/javascript" src="/admin/jsi18n/"></script>\n    <script 
+type="text/javascript" charset="utf-8">\n        (function($) {\n            
+$(document).ready(function() {\n                
+grappelli.initDateAndTimePicker();\n                $("#grp-content-container 
+.grp-group").grp_collapsible_group();\n                
+$("#grp-content-container .grp-collapse").grp_collapsible({\n                  
+  on_init: function(elem, options) {\n                        // open collapse 
+(and all collapse parents) in case of errors\n                        if 
+(elem.find("ul.errorlist").length > 0) {\n                            
+elem.removeClass("grp-closed")\n                                
+.addClass("grp-open");\n                            
+elem.parents(".grp-collapse")\n                                
+.removeClass("grp-closed")\n                                
+.addClass("grp-open");\n                        }\n                    }\n     
+           });\n                var related_lookup_fields_fk = [];\n           
+     var related_lookup_fields_m2m = [];\n                var 
+related_lookup_fields_generic = [];\n                var 
+autocomplete_fields_fk = [];\n                var autocomplete_fields_m2m = 
+[];\n                var autocomplete_fields_generic = [];\n                
+$.each(related_lookup_fields_fk, function() {\n                    $("#id_" + 
+this).grp_related_fk({lookup_url:"/grappelli/lookup/related/"});\n             
+   });\n                $.each(related_lookup_fields_m2m, function() {\n       
+             $("#id_" + 
+this).grp_related_m2m({lookup_url:"/grappelli/lookup/m2m/"});\n                
+});\n                $.each(related_lookup_fields_generic, function() {\n      
+              var content_type = "#id_" + this[0],\n                        
+object_id = "#id_" + this[1];\n                    
+$(object_id).grp_related_generic({content_type:content_type, 
+object_id:object_id, lookup_url:"/grappelli/lookup/related/"});\n              
+  });\n                $.each(autocomplete_fields_fk, function() {\n           
+         $("#id_" + this).grp_autocomplete_fk({\n                        
+lookup_url:"/grappelli/lookup/related/",\n                        
+autocomplete_lookup_url:"/grappelli/lookup/autocomplete/"\n                    
+});\n                });\n                $.each(autocomplete_fields_m2m, 
+function() {\n                    $("#id_" + this).grp_autocomplete_m2m({\n    
+                    lookup_url:"/grappelli/lookup/m2m/",\n                     
+   autocomplete_lookup_url:"/grappelli/lookup/autocomplete/"\n                 
+   });\n                });\n                
+$.each(autocomplete_fields_generic, function() {\n                    var 
+content_type = "#id_" + this[0],\n                        object_id = "#id_" + 
+this[1];\n                    $(object_id).grp_autocomplete_generic({\n        
+                content_type:content_type,\n                        
+object_id:object_id,\n                        
+lookup_url:"/grappelli/lookup/related/",\n                        
+autocomplete_lookup_url:"/grappelli/lookup/autocomplete/"\n                    
+});\n                });\n                $("a#grp-open-all").on("click", 
+function(){\n                    $("#grp-content 
+.grp-collapse-handler").each(function() {\n                        $(this).pare
+nt(".grp-collapse").removeClass("grp-closed").addClass("grp-open");\n          
+          });\n                });\n                
+$("a#grp-close-all").on("click", function(){\n                    
+$("#grp-content .grp-collapse-handler").each(function() {\n                    
+    $(this).parent(".grp-collapse").removeClass("grp-open").addClass("grp-close
+d");\n                    });\n                });\n                // HACK: 
+get rid of currently/change with URL\xe2\x80\x93fields. F**K!!!\n              
+  \n                $(\'p.url\').each(function() {\n                    
+$(this).find("a").remove();\n                    var text = $(this).html();\n  
+                  text = text.replace(/^\\w*: /, "");\n                    
+text = text.replace(/<br>.*: /, "");\n                    
+$(this).html(text);\n                });\n                \n                // 
+HACK: rearrange inlines\n                \n                
+$(\'div.grp-group\').each(function() {\n                    var placeholder = 
+$("fieldset.placeholder."+$(this).attr("id"));\n                    if 
+(placeholder.length) {\n                        
+$(placeholder).replaceWith($(this));\n                    }\n                
+});\n                \n                // HACK: remove input types\n           
+     \n                var clean_input_types = "True";\n                if 
+(clean_input_types == "True") {\n                    
+grappelli.cleanInputTypes();\n                };\n                \n           
+ });\n        })(grp.jQuery);\n    </script>\n    <script 
+src="/static/admin/js/vendor/jquery/jquery.min.js"></script>\n<script 
+src="/static/admin/js/calendar.js"></script>\n<script 
+src="/static/admin/js/jquery.init.js"></script>\n<script 
+src="/static/admin/js/admin/DateTimeShortcuts.js"></script>\n<script 
+src="/static/admin/js/core.js"></script>\n<script 
+src="/static/admin/js/admin/RelatedObjectLookups.js"></script>\n<script 
+src="/static/admin/js/SelectBox.js"></script>\n<script 
+src="/static/admin/js/actions.js"></script>\n<script 
+src="/static/admin/js/SelectFilter2.js"></script>\n<script 
+src="/static/admin/js/urlify.js"></script>\n<script 
+src="/static/admin/js/prepopulate.js"></script>\n<script 
+src="/static/admin/js/vendor/xregexp/xregexp.min.js"></script>\n\n    <!-- 
+EXTRAHEAD -->\n    \n    \n    <script type="text/javascript">\n        
+(function($) {\n            $(document).ready(function() {\n                
+$(\'.add-another\').on("click", function(e) {\n                    
+e.preventDefault();\n                    showAddAnotherPopup(this);\n          
+      });\n                $(\'.related-lookup\').on("click", function(e) {\n  
+                  e.preventDefault();\n                    
+showRelatedObjectLookupPopup(this);\n                });\n            \n       
+     });\n        })(grp.jQuery);\n    </script>\n\n</head>\n<body 
+class="auth-user grp-change-form">\n    <div id="container" 
+class="grp-container">\n\n        \n            <!-- HEADER -->\n            
+<header id="grp-header" class="">\n                \n\n                    \n  
+                      <!-- NAVIGATION -->\n                        <div 
+id="grp-navigation">\n                            \n    \n    \n\n             
+               \n                                <h1 id="grp-admin-title">\n   
+                                 \n                                    \n      
+                                  FuelLedger administration\n                  
+                  \n                                </h1>\n                    
+        \n                            \n                                \n     
+                               <ul id="grp-user-tools">\n                      
+                  <!-- Userlinks -->\n                                        
+\n                                            <!-- Username -->\n              
+                              <li class="grp-user-options-container 
+grp-collapse grp-closed ">\n                                                <a 
+href="javascript://" class="user-options-handler grp-collapse-handler 
+grp-switch-user-is-original">phone-admin</a>\n                                 
+               <ul class="grp-user-options">\n                                 
+                   <!-- Change Password -->\n                                  
+                  \n                                                        
+<li><a href="/admin/password_change/" class="grp-change-password">Change 
+password</a></li>\n                                                    \n      
+                                              <!-- Logout -->\n                
+                                    <li>\n                                     
+                   <form id="logout-form" method="post"\n                      
+                                      action="/admin/logout/">\n               
+                                             <input type="hidden" 
+name="csrfmiddlewaretoken" 
+value="akrHJn9WqTcJ9LPOjTBQokDnqUscxmykx5REBiGUdxaVF6cHShv8xBgBDndKUnDE">\n    
+                                                        <button 
+type="submit">Log out</button>\n                                               
+         </form>\n                                                    </li>\n  
+                                                  <!-- Switch -->\n            
+                                        \n                                     
+           </ul>\n                                            </li>\n          
+                                  <!-- Site URL -->\n                          
+                  \n                                                <li><a 
+href="/">View site</a></li>\n                                            \n    
+                                        <!-- Documentation -->\n               
+                             \n                                            \n  
+                                      \n                                    
+</ul>\n                                \n                            \n        
+                    <!-- Nav-Global -->\n                            \n        
+                </div>\n                    \n\n                    \n         
+               <!-- CONTEXT NAVIGATION -->\n                        <div 
+id="grp-context-navigation">\n                            <nav 
+id="grp-breadcrumbs" class="">\n                                <header 
+style="display:none"><h1>Breadcrumbs</h1></header>\n                           
+     \n    \n        <ul>\n            <li><a href="/admin/">Home</a></li>\n   
+         <li><a href="/admin/auth/">Authentication and 
+Authorization</a></li>\n            <li>\n                \n                <a 
+href="/admin/auth/user/">Users</a></li>\n            
+<li>phone-site-user</li>\n        </ul>\n    \n\n                            
+</nav>\n                            <nav id="grp-page-tools">\n                
+                <header style="display:none"><h1>Page Tools</h1></header>\n    
+                            \n    \n        <ul>\n            <li><a 
+href="javascript://" class="grp-tool" id="grp-open-all" title="Open All 
+Items">&nbsp;</a></li>\n            <li><a href="javascript://" 
+class="grp-tool" id="grp-close-all" title="Close All Items">&nbsp;</a></li>\n  
+      </ul>\n    \n\n                            </nav>\n                      
+  </div>\n                    \n\n                \n            </header>\n    
+    \n\n        <!-- CONTENT -->\n        <article id="grp-content" 
+class="">\n\n            <!-- MESSAGES -->\n            \n                \n   
+         \n\n            <!-- CONTENT TITLE -->\n            <header 
+id="grp-content-title">\n                \n                <h1>Change 
+user</h1>\n                \n    \n        \n            <ul 
+class="grp-object-tools">\n                \n                    \n            
+        <li><a href="/admin/auth/user/2/history/">History</a></li>\n           
+         \n                \n            </ul>\n        \n    \n\n            
+</header>\n\n            <!-- CONTENT-CONTAINER -->\n            <div 
+id="grp-content-container">\n                \n    <form action="" 
+method="post" id="user_form" novalidate><input type="hidden" 
+name="csrfmiddlewaretoken" 
+value="akrHJn9WqTcJ9LPOjTBQokDnqUscxmykx5REBiGUdxaVF6cHShv8xBgBDndKUnDE">\n    
+    <div>\n            <!-- Popup Hidden Field -->\n            \n\n           
+ <!-- No Submit-Row on Top -->\n\n            <!-- Errors -->\n            
+\n\n            <!-- Fieldsets -->\n            \n                \n           
+         \n<fieldset class="module grp-module "><div class="form-row grp-row 
+grp-cells-1 username "><div class="field-box l-2c-fluid l-d-4"><div 
+class="c-1"><label class="required" 
+for="id_username">Username</label></div><div class="c-2"><input type="text" 
+name="username" value="phone-site-user" class="vTextField" maxlength="150" 
+autocapitalize="none" autocomplete="username" required 
+aria-describedby="id_username_helptext" id="id_username"><p 
+class="grp-help">Required. 150 characters or fewer. Letters, digits and 
+@/./+/-/_ only.</p></div></div></div><div class="form-row grp-row grp-cells-1 
+password "><div class="field-box l-2c-fluid l-d-4"><div 
+class="c-1"><label>Password</label></div><div class="c-2"><div disabled 
+aria-describedby="id_password_helptext" 
+id="id_password"><p><strong>algorithm</strong>: 
+<bdi>pbkdf2_sha256</bdi><strong>iterations</strong>: 
+<bdi>1200000</bdi><strong>salt</strong>: 
+<bdi>hAQGvc****************</bdi><strong>hash</strong>: 
+<bdi>sKkKAk**************************************</bdi></p><p><a role="button" 
+class="button" href="../password/">Reset password</a></p></div><p 
+class="grp-help">Raw passwords are not stored, so there is no way to see the 
+user\xe2\x80\x99s password.</p></div></div></div></fieldset>\n\n               
+ \n                    \n<fieldset class="module grp-module "><h2 
+class="grp-collapse-handler">Personal info</h2><div class="form-row grp-row 
+grp-cells-1 first_name "><div class="field-box l-2c-fluid l-d-4"><div 
+class="c-1"><label for="id_first_name">First name</label></div><div 
+class="c-2"><input type="text" name="first_name" class="vTextField" 
+maxlength="150" id="id_first_name"></div></div></div><div class="form-row 
+grp-row grp-cells-1 last_name "><div class="field-box l-2c-fluid l-d-4"><div 
+class="c-1"><label for="id_last_name">Last name</label></div><div 
+class="c-2"><input type="text" name="last_name" class="vTextField" 
+maxlength="150" id="id_last_name"></div></div></div><div class="form-row 
+grp-row grp-cells-1 email "><div class="field-box l-2c-fluid l-d-4"><div 
+class="c-1"><label for="id_email">Email address</label></div><div 
+class="c-2"><input type="email" name="email" class="vTextField" 
+maxlength="254" id="id_email"></div></div></div></fieldset>\n\n                
+\n                    \n<fieldset class="module grp-module "><h2 
+class="grp-collapse-handler">Permissions</h2><div class="form-row grp-row 
+grp-cells-1 is_active "><div class="field-box l-2c-fluid l-d-4"><div 
+class="c-1">&nbsp;</div><div class="c-2"><input type="checkbox" 
+name="is_active" aria-describedby="id_is_active_helptext" id="id_is_active" 
+checked><label class="vCheckboxLabel" for="id_is_active">Active</label><p 
+class="grp-help">Designates whether this user should be treated as active. 
+Unselect this instead of deleting accounts.</p></div></div></div><div 
+class="form-row grp-row grp-cells-1 is_staff "><div class="field-box 
+l-2c-fluid l-d-4"><div class="c-1">&nbsp;</div><div class="c-2"><input 
+type="checkbox" name="is_staff" aria-describedby="id_is_staff_helptext" 
+id="id_is_staff"><label class="vCheckboxLabel" for="id_is_staff">Staff 
+status</label><p class="grp-help">Designates whether the user can log into 
+this admin site.</p></div></div></div><div class="form-row grp-row grp-cells-1 
+is_superuser "><div class="field-box l-2c-fluid l-d-4"><div 
+class="c-1">&nbsp;</div><div class="c-2"><input type="checkbox" 
+name="is_superuser" aria-describedby="id_is_superuser_helptext" 
+id="id_is_superuser"><label class="vCheckboxLabel" 
+for="id_is_superuser">Superuser status</label><p class="grp-help">Designates 
+that this user has all permissions without explicitly assigning 
+them.</p></div></div></div><div class="form-row grp-row grp-cells-1 groups 
+"><div class="field-box l-2c-fluid l-d-4"><div class="c-1"><legend 
+for="id_groups">Groups:</legend></div><div class="c-2"><div 
+class="grp-related-widget-wrapper related-widget-wrapper"><div 
+class="grp-related-widget"><select name="groups" 
+data-context="available-source" id="id_groups" multiple class="selectfilter" 
+data-field-name="groups" data-is-stacked="0"></select></div><ul 
+class="grp-tools grp-related-widget-tools"><li><a 
+class="grp-related-widget-wrapper-link grp-add-related grp-add-another 
+related-widget-wrapper-link add-related add-another" id="add_id_groups"\n      
+                      
+href="/admin/auth/group/add/?_to_field=id&amp;_popup=1"\n                      
+      title="Add another group">&nbsp;</a></li></ul></div><p 
+class="grp-help">The groups this user belongs to. A user will get all 
+permissions granted to each of their groups. Hold down 
+\xe2\x80\x9cControl\xe2\x80\x9d, or \xe2\x80\x9cCommand\xe2\x80\x9d on a Mac, 
+to select more than one.</p></div></div></div><div class="form-row grp-row 
+grp-cells-1 user_permissions "><div class="field-box l-2c-fluid l-d-4"><div 
+class="c-1"><legend for="id_user_permissions">User 
+permissions:</legend></div><div class="c-2"><div 
+class="grp-related-widget-wrapper related-widget-wrapper"><div 
+class="grp-related-widget"><select name="user_permissions" 
+data-context="available-source" id="id_user_permissions" multiple 
+class="selectfilter" data-field-name="user permissions" 
+data-is-stacked="0"><option value="1">Administration | log entry | Can add log 
+entry</option><option value="2">Administration | log entry | Can change log 
+entry</option><option value="3">Administration | log entry | Can delete log 
+entry</option><option value="4">Administration | log entry | Can view log 
+entry</option><option value="9">Authentication and Authorization | group | Can 
+add group</option><option value="10">Authentication and Authorization | group 
+| Can change group</option><option value="11">Authentication and Authorization 
+| group | Can delete group</option><option value="12">Authentication and 
+Authorization | group | Can view group</option><option 
+value="5">Authentication and Authorization | permission | Can add 
+permission</option><option value="6">Authentication and Authorization | 
+permission | Can change permission</option><option value="7">Authentication 
+and Authorization | permission | Can delete permission</option><option 
+value="8">Authentication and Authorization | permission | Can view 
+permission</option><option value="13">Authentication and Authorization | user 
+| Can add user</option><option value="14">Authentication and Authorization | 
+user | Can change user</option><option value="15">Authentication and 
+Authorization | user | Can delete user</option><option 
+value="16">Authentication and Authorization | user | Can view 
+user</option><option value="17">Content Types | content type | Can add content 
+type</option><option value="18">Content Types | content type | Can change 
+content type</option><option value="19">Content Types | content type | Can 
+delete content type</option><option value="20">Content Types | content type | 
+Can view content type</option><option value="81">Ledger | cash up additional | 
+Can add cash up additional</option><option value="82">Ledger | cash up 
+additional | Can change cash up additional</option><option value="83">Ledger | 
+cash up additional | Can delete cash up additional</option><option 
+value="84">Ledger | cash up additional | Can view cash up 
+additional</option><option value="37">Ledger | cash up field | Can add cash up 
+field</option><option value="38">Ledger | cash up field | Can change cash up 
+field</option><option value="39">Ledger | cash up field | Can delete cash up 
+field</option><option value="40">Ledger | cash up field | Can view cash up 
+field</option><option value="29">Ledger | cash up form | Can add cash up 
+form</option><option value="30">Ledger | cash up form | Can change cash up 
+form</option><option value="31">Ledger | cash up form | Can delete cash up 
+form</option><option value="32">Ledger | cash up form | Can view cash up 
+form</option><option value="89">Ledger | cash up shift record | Can add cash 
+up shift record</option><option value="90">Ledger | cash up shift record | Can 
+change cash up shift record</option><option value="91">Ledger | cash up shift 
+record | Can delete cash up shift record</option><option value="92">Ledger | 
+cash up shift record | Can view cash up shift record</option><option 
+value="61">Ledger | daily fuel reading | Can add daily fuel 
+reading</option><option value="62">Ledger | daily fuel reading | Can change 
+daily fuel reading</option><option value="63">Ledger | daily fuel reading | 
+Can delete daily fuel reading</option><option value="64">Ledger | daily fuel 
+reading | Can view daily fuel reading</option><option value="57">Ledger | fuel 
+booking | Can add fuel booking</option><option value="58">Ledger | fuel 
+booking | Can change fuel booking</option><option value="59">Ledger | fuel 
+booking | Can delete fuel booking</option><option value="60">Ledger | fuel 
+booking | Can view fuel booking</option><option value="93">Ledger | fuel 
+transfer | Can add fuel transfer</option><option value="94">Ledger | fuel 
+transfer | Can change fuel transfer</option><option value="95">Ledger | fuel 
+transfer | Can delete fuel transfer</option><option value="96">Ledger | fuel 
+transfer | Can view fuel transfer</option><option value="85">Ledger | manual 
+shop point | Can add manual shop point</option><option value="86">Ledger | 
+manual shop point | Can change manual shop point</option><option 
+value="87">Ledger | manual shop point | Can delete manual shop 
+point</option><option value="88">Ledger | manual shop point | Can view manual 
+shop point</option><option value="49">Ledger | nozzle | Can add 
+nozzle</option><option value="50">Ledger | nozzle | Can change 
+nozzle</option><option value="51">Ledger | nozzle | Can delete 
+nozzle</option><option value="52">Ledger | nozzle | Can view 
+nozzle</option><option value="65">Ledger | nozzle fuel reading | Can add 
+nozzle fuel reading</option><option value="66">Ledger | nozzle fuel reading | 
+Can change nozzle fuel reading</option><option value="67">Ledger | nozzle fuel 
+reading | Can delete nozzle fuel reading</option><option value="68">Ledger | 
+nozzle fuel reading | Can view nozzle fuel reading</option><option 
+value="41">Ledger | shift entry | Can add shift entry</option><option 
+value="42">Ledger | shift entry | Can change shift entry</option><option 
+value="43">Ledger | shift entry | Can delete shift entry</option><option 
+value="44">Ledger | shift entry | Can view shift entry</option><option 
+value="25">Ledger | site | Can add site</option><option value="26">Ledger | 
+site | Can change site</option><option value="27">Ledger | site | Can delete 
+site</option><option value="28">Ledger | site | Can view site</option><option 
+value="69">Ledger | site audit event | Can add site audit 
+event</option><option value="70">Ledger | site audit event | Can change site 
+audit event</option><option value="71">Ledger | site audit event | Can delete 
+site audit event</option><option value="72">Ledger | site audit event | Can 
+view site audit event</option><option value="73">Ledger | site group | Can add 
+site group</option><option value="74">Ledger | site group | Can change site 
+group</option><option value="75">Ledger | site group | Can delete site 
+group</option><option value="76">Ledger | site group | Can view site 
+group</option><option value="53">Ledger | speed point | Can add speed 
+point</option><option value="54">Ledger | speed point | Can change speed 
+point</option><option value="55">Ledger | speed point | Can delete speed 
+point</option><option value="56">Ledger | speed point | Can view speed 
+point</option><option value="45">Ledger | tank | Can add tank</option><option 
+value="46">Ledger | tank | Can change tank</option><option value="47">Ledger | 
+tank | Can delete tank</option><option value="48">Ledger | tank | Can view 
+tank</option><option value="77">Ledger | tank dip reading | Can add tank dip 
+reading</option><option value="78">Ledger | tank dip reading | Can change tank 
+dip reading</option><option value="79">Ledger | tank dip reading | Can delete 
+tank dip reading</option><option value="80">Ledger | tank dip reading | Can 
+view tank dip reading</option><option value="33">Ledger | user profile | Can 
+add user profile</option><option value="34">Ledger | user profile | Can change 
+user profile</option><option value="35">Ledger | user profile | Can delete 
+user profile</option><option value="36">Ledger | user profile | Can view user 
+profile</option><option value="21">Sessions | session | Can add 
+session</option><option value="22">Sessions | session | Can change 
+session</option><option value="23">Sessions | session | Can delete 
+session</option><option value="24">Sessions | session | Can view 
+session</option></select></div></div><p class="grp-help">Specific permissions 
+for this user. Hold down \xe2\x80\x9cControl\xe2\x80\x9d, or 
+\xe2\x80\x9cCommand\xe2\x80\x9d on a Mac, to select more than 
+one.</p></div></div></div></fieldset>\n\n                \n                    
+\n<fieldset class="module grp-module "><h2 
+class="grp-collapse-handler">Important dates</h2><div class="form-row grp-row 
+grp-cells-1 last_login "><div class="field-box l-2c-fluid l-d-4"><div 
+class="c-1"><legend for="id_last_login">Last login:</legend></div><div 
+class="c-2"><p class="datetime"><label 
+for="id_last_login_0">Date:</label><input type="text" name="last_login_0" 
+class="vDateField" size="10" id="id_last_login_0" 
+aria-describedby="id_last_login_timezone_warning_helptext"><br><label 
+for="id_last_login_1">Time:</label><input type="text" name="last_login_1" 
+class="vTimeField" size="8" id="id_last_login_1" aria-describedby="id_last_logi
+n_timezone_warning_helptext"></p></div></div></div><div class="form-row 
+grp-row grp-cells-1 date_joined "><div class="field-box l-2c-fluid l-d-4"><div 
+class="c-1"><legend class="required" for="id_date_joined">Date 
+joined:</legend></div><div class="c-2"><p class="datetime"><label 
+for="id_date_joined_0">Date:</label><input type="text" name="date_joined_0" 
+value="2026-10-07" class="vDateField" size="10" required id="id_date_joined_0" 
+aria-describedby="id_date_joined_timezone_warning_helptext"><br><label 
+for="id_date_joined_1">Time:</label><input type="text" name="date_joined_1" 
+value="14:50:56" class="vTimeField" size="8" required id="id_date_joined_1" 
+aria-describedby="id_date_joined_timezone_warning_helptext"></p><input 
+type="hidden" name="initial-date_joined_0" value="2026-10-07" 
+id="initial-id_date_joined_0"><input type="hidden" 
+name="initial-date_joined_1" value="14:50:56" 
+id="initial-id_date_joined_1"></div></div></div></fieldset>\n\n                
+\n            \n\n            \n\n            <!-- Inlines -->\n            \n 
+               \n            \n\n            \n\n            <!-- Submit-Row 
+-->\n            \n<footer class="grp-module grp-submit-row 
+grp-fixed-footer">\n    <header style="display:none"><h1>Submit 
+Options</h1></header>\n    <div>\n        \n        \n            \n           
+ <div class="grp-float-left"><a href="/admin/auth/user/2/delete/" 
+class="grp-button grp-delete-link">Delete</a></div>\n        \n        \n      
+  \t<div><input type="submit" value="Save" class="grp-button grp-default" 
+name="_save" /></div>\n        \n        \n        \n        \t<div><input 
+type="submit" value="Save and add another" class="grp-button" 
+name="_addanother" /></div>\n        \n        \n        \t<div><input 
+type="submit" value="Save and continue editing" class="grp-button" 
+name="_continue" /></div>\n        \n        \n    </div>\n</footer>\n\n\n     
+       <!-- JS for prepopulated fields -->\n            \n<script 
+id="django-admin-prepopulated-fields-constants"\n        
+src="/static/admin/js/prepopulate_init.js"\n        
+data-prepopulated-fields="[]">\n</script>\n\n        </div>\n    </form>\n\n   
+         </div>\n\n        </article>\n\n        <!-- FOOTER -->\n        \n\n 
+   </div>\n</body>\n</html>\n'
+
+----------------------------------------------------------------------
+Ran 1 test in 2.128s
+
+FAILED (failures=1)
+Destroying test database for alias 'default' ('test_fuelledger')...
+
+  Applying sessions.0001_initial... OK
+System check identified no issues (0 silenced).

@@ -884,6 +884,7 @@ def _site_user_snapshot(user):
 		"email": user.email,
 		"is_active": user.is_active,
 		"groups": list(user.fuel_site_groups.order_by("name").values_list("name", flat=True)),
+		"phone_number": profile.phone_number,
 		"form_permissions": list(profile.form_permissions),
 		"can_configure": profile.can_configure,
 		"can_manage_users": profile.can_manage_users,
@@ -906,32 +907,8 @@ def site_user_create(request, slug):
 	denied = _require_site_user_manager(request)
 	if denied:
 		return denied
-	site = request.current_site
-	form = SiteUserCreateForm(site, request.POST or None)
-	if request.method == "POST" and form.is_valid():
-		data = form.cleaned_data
-		user = User.objects.create_user(
-			username=data["username"],
-			password=data["password"],
-			first_name=data["first_name"],
-			last_name=data["last_name"],
-			email=data["email"],
-		)
-		profile = UserProfile.objects.create(
-			user=user,
-			role=UserProfile.Role.SITE,
-			site=site,
-			form_permissions=data["form_permissions"],
-			can_configure=data["can_configure"],
-			can_manage_users=data["can_manage_users"],
-		)
-		for group in data["groups"]:
-			group.users.add(user)
-			_sync_site_group_members(group)
-		_record_audit(site, request.user, "Site user", user.username, "created", after=_site_user_snapshot(user))
-		messages.success(request, f"Site user {user.username} created.")
-		return redirect("site-users", slug=site.slug)
-	return render(request, "ledger/site_user_form.html", {"site": site, "form": form})
+	request.session["site_admin_site_id"] = request.current_site.pk
+	return redirect(reverse("site_admin:auth_user_add"))
 
 
 @login_required
@@ -939,37 +916,9 @@ def site_user_edit(request, slug, user_id):
 	denied = _require_site_user_manager(request)
 	if denied:
 		return denied
-	site = request.current_site
-	user = get_object_or_404(User.objects.select_related("fuel_profile"), pk=user_id, fuel_profile__site=site)
-	form = SiteUserEditForm(site, user, request.POST or None)
-	if request.method == "POST" and form.is_valid():
-		data = form.cleaned_data
-		before = _site_user_snapshot(user)
-		user.username = data["username"]
-		user.first_name = data["first_name"]
-		user.last_name = data["last_name"]
-		user.email = data["email"]
-		user.is_active = data["is_active"]
-		if data["password"]:
-			user.set_password(data["password"])
-		user.save()
-		profile = user.fuel_profile
-		profile.form_permissions = data["form_permissions"]
-		profile.can_configure = data["can_configure"]
-		profile.can_manage_users = data["can_manage_users"]
-		profile.save(update_fields=["form_permissions", "can_configure", "can_manage_users"])
-		user.fuel_site_groups.set(data["groups"])
-		for group in SiteGroup.objects.filter(site=site).prefetch_related("users"):
-			_sync_site_group_members(group)
-		_record_audit(site, request.user, "Site user", user.username, "changed", before=before, after=_site_user_snapshot(user))
-		messages.success(request, f"Site user {user.username} updated.")
-		return redirect("site-users", slug=site.slug)
-	return render(request, "ledger/site_user_form.html", {
-		"site": site,
-		"form": form,
-		"account": user,
-		"edit_mode": True,
-	})
+	get_object_or_404(User, pk=user_id, fuel_profile__site=request.current_site)
+	request.session["site_admin_site_id"] = request.current_site.pk
+	return redirect(reverse("site_admin:auth_user_change", args=[user_id]))
 
 
 @login_required

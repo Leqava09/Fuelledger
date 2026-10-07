@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from django import forms
 from django.contrib.admin.widgets import FilteredSelectMultiple
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Permission, User
 from django.utils import timezone
 
 from .models import CashUpAdditional, FuelBooking, ManualShopPoint, SITE_FORM_PERMISSION_CHOICES, SiteGroup, SpeedPoint, Tank
@@ -371,10 +371,16 @@ class SiteUserCreateForm(forms.Form):
 	email = forms.EmailField(required=False)
 	password = forms.CharField(widget=forms.PasswordInput)
 	confirm_password = forms.CharField(label="Confirm password", widget=forms.PasswordInput)
+	phone_number = forms.CharField(max_length=30, required=False, label="Phone number")
 	groups = forms.ModelMultipleChoiceField(
 		queryset=SiteGroup.objects.none(),
 		required=False,
 		widget=FilteredSelectMultiple("site groups", False),
+	)
+	user_permissions = forms.ModelMultipleChoiceField(
+		queryset=Permission.objects.none(),
+		required=False,
+		widget=FilteredSelectMultiple("user permissions", False),
 	)
 	form_permissions = forms.MultipleChoiceField(
 		choices=SITE_FORM_PERMISSION_CHOICES,
@@ -389,6 +395,7 @@ class SiteUserCreateForm(forms.Form):
 		super().__init__(*args, **kwargs)
 		self.site = site
 		self.fields["groups"].queryset = SiteGroup.objects.filter(site=site).order_by("name")
+		self.fields["user_permissions"].queryset = Permission.objects.order_by("content_type__app_label", "content_type__model", "codename")
 		self.fields["form_permissions"].initial = [permission for permission, _ in SITE_FORM_PERMISSION_CHOICES]
 
 	def clean_username(self):
@@ -441,11 +448,17 @@ class SiteUserEditForm(forms.Form):
 	first_name = forms.CharField(max_length=150, required=False)
 	last_name = forms.CharField(max_length=150, required=False)
 	email = forms.EmailField(required=False)
+	phone_number = forms.CharField(max_length=30, required=False, label="Phone number")
 	is_active = forms.BooleanField(required=False)
 	groups = forms.ModelMultipleChoiceField(
 		queryset=SiteGroup.objects.none(),
 		required=False,
 		widget=FilteredSelectMultiple("site groups", False),
+	)
+	user_permissions = forms.ModelMultipleChoiceField(
+		queryset=Permission.objects.none(),
+		required=False,
+		widget=FilteredSelectMultiple("user permissions", False),
 	)
 	form_permissions = forms.MultipleChoiceField(
 		choices=SITE_FORM_PERMISSION_CHOICES,
@@ -464,12 +477,15 @@ class SiteUserEditForm(forms.Form):
 		self.user = user
 		profile = user.fuel_profile
 		self.fields["groups"].queryset = SiteGroup.objects.filter(site=site).order_by("name")
+		self.fields["user_permissions"].queryset = Permission.objects.order_by("content_type__app_label", "content_type__model", "codename")
 		self.initial.setdefault("username", user.username)
 		self.initial.setdefault("first_name", user.first_name)
 		self.initial.setdefault("last_name", user.last_name)
 		self.initial.setdefault("email", user.email)
+		self.initial.setdefault("phone_number", profile.phone_number)
 		self.initial.setdefault("is_active", user.is_active)
 		self.initial.setdefault("groups", user.fuel_site_groups.filter(site=site))
+		self.initial.setdefault("user_permissions", user.user_permissions.all())
 		self.initial.setdefault("form_permissions", profile.form_permissions)
 		self.initial.setdefault("can_configure", profile.can_configure)
 		self.initial.setdefault("can_manage_users", profile.can_manage_users)

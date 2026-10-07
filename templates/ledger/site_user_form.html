@@ -16,7 +16,7 @@
     <fieldset class="grp-module">
         <h2>Account details</h2>
         {% for field in form %}
-            {% if field.name == "username" or field.name == "first_name" or field.name == "last_name" or field.name == "email" or field.name == "is_active" or field.name == "password" or field.name == "confirm_password" %}
+            {% if field.name == "username" or field.name == "first_name" or field.name == "last_name" or field.name == "email" or field.name == "phone_number" or field.name == "is_active" or field.name == "password" or field.name == "confirm_password" %}
             <div class="grp-row">
                 {{ field.label_tag }}{{ field }}
                 {% if field.help_text %}<p class="help">{{ field.help_text }}</p>{% endif %}
@@ -28,6 +28,10 @@
     <fieldset class="grp-module">
         <h2>Site groups</h2>
         <div class="grp-row">{{ form.groups.label_tag }}{{ form.groups }}{{ form.groups.errors }}</div>
+    </fieldset>
+    <fieldset class="grp-module">
+        <h2>User permissions</h2>
+        <div class="grp-row">{{ form.user_permissions.label_tag }}{{ form.user_permissions }}{{ form.user_permissions.errors }}</div>
     </fieldset>
     <fieldset class="grp-module">
         <h2>Site permissions</h2>

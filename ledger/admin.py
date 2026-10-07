@@ -3,6 +3,7 @@ from django.contrib import admin
 from django.contrib.admin import AdminSite
 from django.contrib.admin.widgets import FilteredSelectMultiple
 from django.contrib.auth.admin import GroupAdmin, UserAdmin
+from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Group, User
 from django.shortcuts import redirect
 from django.urls import reverse
@@ -129,7 +130,7 @@ class UserProfileInline(admin.StackedInline):
 	form = UserProfileAdminForm
 	extra = 0
 	max_num = 1
-	fields = ("role", "site", "form_permissions", "can_configure", "can_manage_users")
+	fields = ("role", "site", "phone_number", "form_permissions", "can_configure", "can_manage_users")
 	verbose_name = "FuelLedger access"
 	verbose_name_plural = "FuelLedger permissions"
 
@@ -158,8 +159,57 @@ class UserProfileInline(admin.StackedInline):
 		return formset
 
 
+class FuelLedgerUserChangeForm(forms.ModelForm):
+	phone_number = forms.CharField(max_length=30, required=False, label="Phone number")
+
+	class Meta:
+		model = User
+		fields = ("username", "first_name", "last_name", "email", "phone_number", "is_active", "groups", "user_permissions")
+
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+		if self.instance and self.instance.pk:
+			try:
+				self.fields["phone_number"].initial = self.instance.fuel_profile.phone_number
+			except UserProfile.DoesNotExist:
+				pass
+
+	def save(self, commit=True):
+		user = super().save(commit=False)
+		if commit:
+			user.save()
+			profile, _ = UserProfile.objects.get_or_create(user=user)
+			profile.phone_number = self.cleaned_data.get("phone_number", "")
+			profile.save(update_fields=["phone_number"])
+		return user
+
+
+class FuelLedgerUserCreationForm(UserCreationForm):
+	phone_number = forms.CharField(max_length=30, required=False, label="Phone number")
+
+	class Meta:
+		model = User
+		fields = ("username", "first_name", "last_name", "email", "phone_number")
+
+	def save(self, commit=True):
+		user = super().save(commit=False)
+		if commit:
+			user.save()
+			profile, _ = UserProfile.objects.get_or_create(user=user)
+			profile.phone_number = self.cleaned_data.get("phone_number", "")
+			profile.save(update_fields=["phone_number"])
+		return user
+
+
 class FuelLedgerUserAdmin(UserAdmin):
-	inlines = (UserProfileInline,)
+	form = FuelLedgerUserChangeForm
+	add_form = FuelLedgerUserCreationForm
+	inlines = ()
+	add_fieldsets = (
+		(None, {"classes": ("wide",), "fields": ("username", "first_name", "last_name", "email", "phone_number", "password1", "password2")}),
+		("Permissions", {"fields": ("is_active", "groups", "user_permissions")}),
+		("Important dates", {"fields": ("last_login", "date_joined")}),
+	)
 
 	def _site_scope_allowed(self, request):
 		if not request.current_site:
@@ -208,14 +258,22 @@ class FuelLedgerUserAdmin(UserAdmin):
 	def get_fieldsets(self, request, obj=None):
 		if request.current_site:
 			if obj is None:
-				return ((None, {"classes": ("wide",), "fields": ("username", "password1", "password2")}),)
+				return ((None, {"classes": ("wide",), "fields": ("username", "password1", "password2", "phone_number")}),)
 			return (
 				(None, {"fields": ("username", "password")}),
-				("Personal info", {"fields": ("first_name", "last_name", "email")}),
-				("Permissions", {"fields": ("is_active", "groups")}),
+				("Personal info", {"fields": ("first_name", "last_name", "email", "phone_number")}),
+				("Permissions", {"fields": ("is_active", "groups", "user_permissions")}),
 				("Important dates", {"fields": ("last_login", "date_joined")}),
 			)
-		return super().get_fieldsets(request, obj)
+		fieldsets = list(super().get_fieldsets(request, obj))
+		for index, (name, options) in enumerate(fieldsets):
+			if name == "Personal info":
+				fields = list(options["fields"])
+				if "phone_number" not in fields:
+					fields.insert(len(fields), "phone_number")
+				options["fields"] = tuple(fields)
+				break
+		return tuple(fieldsets)
 
 	def formfield_for_manytomany(self, db_field, request, **kwargs):
 		if request.current_site and db_field.name == "groups":
@@ -307,6 +365,120 @@ class SiteGroupInline(admin.StackedInline):
 			kwargs["queryset"] = Site.objects.filter(pk=request.current_site.pk)
 			kwargs["initial"] = request.current_site.pk
 		return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+
+class SiteScopedUserAdmin(UserAdmin):
+	form = FuelLedgerUserChangeForm
+	add_form = FuelLedgerUserCreationForm
+	add_fieldsets = (
+		(None, {"classes": ("wide",), "fields": ("username", "first_name", "last_name", "email", "phone_number", "password1", "password2", "is_active")}),
+		("Permissions", {"fields": ("groups", "user_permissions")}),
+		("Important dates", {"fields": ("last_login", "date_joined")}),
+	)
+
+	def _site_scope_allowed(self, request):
+		if not request.current_site:
+			return False
+		if request.user.is_superuser:
+			return True
+		try:
+			profile = request.user.fuel_profile
+		except UserProfile.DoesNotExist:
+			return False
+		return profile.role == UserProfile.Role.HQ or (
+			profile.role == UserProfile.Role.SITE
+			and profile.site_id == request.current_site.pk
+			and profile.can_manage_users
+		)
+
+	def has_module_permission(self, request):
+		return self._site_scope_allowed(request) or super().has_module_permission(request)
+
+	def has_view_permission(self, request, obj=None):
+		return self._site_scope_allowed(request) or super().has_view_permission(request, obj)
+
+	def has_add_permission(self, request):
+		return self._site_scope_allowed(request) or super().has_add_permission(request)
+
+	def has_change_permission(self, request, obj=None):
+		return self._site_scope_allowed(request) or super().has_change_permission(request, obj)
+
+	def has_delete_permission(self, request, obj=None):
+		return self._site_scope_allowed(request) or super().has_delete_permission(request, obj)
+
+	def save_model(self, request, obj, form, change):
+		super().save_model(request, obj, form, change)
+		if not request.current_site:
+			return
+		profile, _ = UserProfile.objects.get_or_create(user=obj)
+		profile.role = UserProfile.Role.SITE
+		profile.site = request.current_site
+		profile.phone_number = form.cleaned_data.get("phone_number", "")
+		profile.form_permissions = list(profile.form_permissions or [])
+		profile.save(update_fields=["role", "site", "phone_number", "form_permissions"])
+
+	def get_queryset(self, request):
+		queryset = super().get_queryset(request)
+		if request.current_site:
+			queryset = queryset.filter(fuel_profile__site=request.current_site)
+		return queryset
+
+	def get_fieldsets(self, request, obj=None):
+		if request.current_site:
+			if obj is None:
+				return self.add_fieldsets
+			return (
+				(None, {"fields": ("username", "password")}),
+				("Personal info", {"fields": ("first_name", "last_name", "email", "phone_number")}),
+				("Permissions", {"fields": ("is_active", "is_staff", "is_superuser", "groups", "user_permissions")}),
+				("Important dates", {"fields": ("last_login", "date_joined")}),
+			)
+		return super().get_fieldsets(request, obj)
+
+	def formfield_for_manytomany(self, db_field, request, **kwargs):
+		if request.current_site and db_field.name == "groups":
+			kwargs["queryset"] = Group.objects.filter(fuel_site_group__site=request.current_site)
+		return super().formfield_for_manytomany(db_field, request, **kwargs)
+
+
+class SiteScopedGroupAdmin(GroupAdmin):
+	inlines = (SiteGroupInline,)
+
+	def _site_scope_allowed(self, request):
+		if not request.current_site:
+			return False
+		if request.user.is_superuser:
+			return True
+		try:
+			profile = request.user.fuel_profile
+		except UserProfile.DoesNotExist:
+			return False
+		return profile.role == UserProfile.Role.HQ or (
+			profile.role == UserProfile.Role.SITE
+			and profile.site_id == request.current_site.pk
+			and profile.can_manage_users
+		)
+
+	def has_module_permission(self, request):
+		return self._site_scope_allowed(request) or super().has_module_permission(request)
+
+	def has_view_permission(self, request, obj=None):
+		return self._site_scope_allowed(request) or super().has_view_permission(request, obj)
+
+	def has_add_permission(self, request):
+		return self._site_scope_allowed(request) or super().has_add_permission(request)
+
+	def has_change_permission(self, request, obj=None):
+		return self._site_scope_allowed(request) or super().has_change_permission(request, obj)
+
+	def has_delete_permission(self, request, obj=None):
+		return self._site_scope_allowed(request) or super().has_delete_permission(request, obj)
+
+	def get_queryset(self, request):
+		queryset = super().get_queryset(request)
+		if request.current_site:
+			queryset = queryset.filter(fuel_site_group__site=request.current_site)
+		return queryset
 
 
 class FuelLedgerGroupAdmin(GroupAdmin):
@@ -531,8 +703,8 @@ class SiteScopedAdminSite(AdminSite):
 site_admin_site = SiteScopedAdminSite(name="site_admin")
 site_admin_site.site_header = "FuelLedger site access"
 site_admin_site.site_title = "FuelLedger site access"
-site_admin_site.register(User, FuelLedgerUserAdmin)
-site_admin_site.register(Group, FuelLedgerGroupAdmin)
+site_admin_site.register(User, SiteScopedUserAdmin)
+site_admin_site.register(Group, SiteScopedGroupAdmin)
 
 
 def _site_admin_home(request):

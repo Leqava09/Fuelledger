@@ -104,7 +104,7 @@ class SiteConfigurationAdminTests(TestCase):
         for field_name in ("name", "manager_name", "contact_number", "contact_email"):
             self.assertIn("width: 50%", html[html.index(f'id="id_{field_name}"') - 300:html.index(f'id="id_{field_name}"') + 300])
 
-    def test_hq_user_admin_exposes_site_form_permissions_in_grappelli_inline(self):
+    def test_hq_user_admin_uses_standard_user_permissions_without_fuelledger_inline(self):
         admin_user = User.objects.create_superuser(username="permission-admin", password="test-pass-123", email="permission-admin@example.com")
         site = Site.objects.create(name="Permission Admin Site")
         site_user = User.objects.create_user(username="permission-site-user", password="test-pass-123")
@@ -115,8 +115,41 @@ class SiteConfigurationAdminTests(TestCase):
         response = client.get(reverse("admin:auth_user_change", args=[site_user.pk]))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Site form permissions")
+        self.assertContains(response, "User permissions")
         self.assertContains(response, "selectfilter")
+        self.assertNotContains(response, "FuelLedger permissions")
+        self.assertNotContains(response, "FuelLedger access")
+
+    def test_site_user_form_exposes_standard_user_permissions(self):
+        site = Site.objects.create(name="Site Permissions Test")
+        admin_user = User.objects.create_user(username="site-permission-admin", password="test-pass-123")
+        UserProfile.objects.create(user=admin_user, role=UserProfile.Role.HQ)
+        client = Client()
+        client.force_login(admin_user)
+
+        response = client.get(reverse("site-user-create", args=[site.slug]))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("site_admin:auth_user_add"))
+
+    def test_hq_and_site_users_include_phone_number_field(self):
+        admin_user = User.objects.create_superuser(username="phone-admin", password="test-pass-123", email="phone-admin@example.com")
+        site = Site.objects.create(name="Phone Field Site")
+        site_user = User.objects.create_user(username="phone-site-user", password="test-pass-123")
+        UserProfile.objects.create(user=site_user, role=UserProfile.Role.SITE, site=site)
+        client = Client()
+        client.force_login(admin_user)
+
+        admin_response = client.get(reverse("admin:auth_user_change", args=[site_user.pk]))
+        self.assertEqual(admin_response.status_code, 200)
+        self.assertContains(admin_response, "Phone number")
+
+        site_user_admin = User.objects.create_user(username="site-phone-admin", password="test-pass-123")
+        UserProfile.objects.create(user=site_user_admin, role=UserProfile.Role.HQ)
+        client.force_login(site_user_admin)
+        site_response = client.get(reverse("site-user-create", args=[site.slug]))
+        self.assertEqual(site_response.status_code, 302)
+        self.assertEqual(site_response["Location"], reverse("site_admin:auth_user_add"))
 
     def test_site_registration_contains_currency_and_cash_up_additional_inline(self):
         admin_user = User.objects.create_superuser(username="currency-admin", password="test-pass-123", email="currency-admin@example.com")
@@ -666,7 +699,6 @@ class SiteAccessTests(TestCase):
         history_url = reverse("site-history", args=[self.site_one.slug])
         urls = (
             reverse("site-users", args=[self.site_one.slug]),
-            reverse("site-user-create", args=[self.site_one.slug]),
             reverse("site-groups", args=[self.site_one.slug]),
         )
 
@@ -679,11 +711,15 @@ class SiteAccessTests(TestCase):
                     self.assertContains(response, "selectfilter")
                     self.assertContains(response, "Granted forms")
 
-            cash_up_url = f"{reverse('blank-site-form', args=[self.site_one.slug, 'cash-up'])}?date={timezone.localdate().isoformat()}&shift=Day"
-            cash_up_response = self.client.get(cash_up_url)
-            self.assertEqual(cash_up_response.status_code, 200)
-            self.assertContains(cash_up_response, reverse("site-form-history", args=[self.site_one.slug, "cash-up"]))
-            self.assertNotContains(cash_up_response, history_url)
+        create_response = self.client.get(reverse("site-user-create", args=[self.site_one.slug]))
+        self.assertEqual(create_response.status_code, 302)
+        self.assertEqual(create_response["Location"], reverse("site_admin:auth_user_add"))
+
+        cash_up_url = f"{reverse('blank-site-form', args=[self.site_one.slug, 'cash-up'])}?date={timezone.localdate().isoformat()}&shift=Day"
+        cash_up_response = self.client.get(cash_up_url)
+        self.assertEqual(cash_up_response.status_code, 200)
+        self.assertContains(cash_up_response, reverse("site-form-history", args=[self.site_one.slug, "cash-up"]))
+        self.assertNotContains(cash_up_response, history_url)
 
     def test_site_user_and_group_creation_are_recorded_in_history(self):
         self.site_user.fuel_profile.can_manage_users = True
@@ -693,25 +729,11 @@ class SiteAccessTests(TestCase):
         group_response = self.client.post(reverse("site-groups", args=[self.site_one.slug]), {"name": "Shift Leads"})
         self.assertEqual(group_response.status_code, 302)
         group = SiteGroup.objects.get(site=self.site_one, name="Shift Leads")
-        user_response = self.client.post(reverse("site-user-create", args=[self.site_one.slug]), {
-            "username": "site-operator",
-            "first_name": "Site",
-            "last_name": "Operator",
-            "email": "operator@example.com",
-            "password": "safe-test-password-123",
-            "confirm_password": "safe-test-password-123",
-            "groups": [group.pk],
-        })
-
-        self.assertEqual(user_response.status_code, 302)
-        created_user = User.objects.get(username="site-operator")
-        self.assertEqual(created_user.fuel_profile.site, self.site_one)
-        self.assertIn(created_user, group.users.all())
-        self.assertIn(group.django_group, created_user.groups.all())
-        self.assertIn(created_user, group.django_group.user_set.all())
-        self.assertEqual(self.site_one.audit_events.count(), 2)
+        create_response = self.client.get(reverse("site-user-create", args=[self.site_one.slug]))
+        self.assertEqual(create_response.status_code, 302)
+        self.assertEqual(create_response["Location"], reverse("site_admin:auth_user_add"))
+        self.assertEqual(self.site_one.audit_events.count(), 1)
         self.assertContains(self.client.get(reverse("site-history", args=[self.site_one.slug])), "Site group")
-        self.assertContains(self.client.get(reverse("site-history", args=[self.site_one.slug])), "Site user")
 
     def test_site_user_editor_changes_only_users_at_the_current_site(self):
         self.site_user.fuel_profile.can_manage_users = True
@@ -720,38 +742,29 @@ class SiteAccessTests(TestCase):
         UserProfile.objects.create(user=target, role=UserProfile.Role.SITE, site=self.site_one)
         other_site_user = User.objects.create_user(username="other-site-target", password="initial-password")
         UserProfile.objects.create(user=other_site_user, role=UserProfile.Role.SITE, site=self.site_two)
-        group = SiteGroup.objects.create(site=self.site_one, name="Book-in operators")
         self.client.force_login(self.site_user)
         edit_url = reverse("site-user-edit", args=[self.site_one.slug, target.pk])
 
-        page = self.client.get(edit_url)
-        self.assertEqual(page.status_code, 200)
-        self.assertContains(page, "selectfilter")
-        self.assertContains(page, "Site permissions")
+        response = self.client.get(edit_url)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("site_admin:auth_user_change", args=[target.pk]))
         self.assertEqual(self.client.get(reverse("site-user-edit", args=[self.site_one.slug, other_site_user.pk])).status_code, 404)
 
-        response = self.client.post(edit_url, {
-            "username": "site-target",
-            "first_name": "Updated",
-            "last_name": "Operator",
-            "email": "updated@example.com",
-            "is_active": "on",
-            "groups": [str(group.pk)],
-            "form_permissions": ["book-in-fuel"],
-            "can_configure": "on",
-            "password": "",
-            "confirm_password": "",
-        })
+    def test_site_user_can_access_native_user_admin_without_global_auth_perms(self):
+        self.site_user.is_staff = True
+        self.site_user.save(update_fields=["is_staff"])
+        self.site_user.fuel_profile.can_manage_users = True
+        self.site_user.fuel_profile.save(update_fields=["can_manage_users"])
+        self.client.force_login(self.site_user)
 
-        self.assertEqual(response.status_code, 302)
-        target.refresh_from_db()
-        self.assertEqual(target.first_name, "Updated")
-        self.assertIn(group, target.fuel_site_groups.all())
-        self.assertIn(group.django_group, target.groups.all())
-        self.assertEqual(target.fuel_profile.form_permissions, ["book-in-fuel"])
-        self.assertTrue(target.fuel_profile.can_configure)
-        self.assertFalse(target.fuel_profile.can_manage_users)
-        self.assertTrue(self.site_one.audit_events.filter(category="Site user", object_label="site-target", action="changed").exists())
+        self.client.get(reverse("site-admin-users", args=[self.site_one.slug]))
+        response = self.client.get(reverse("site_admin:auth_user_add"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'name="groups"')
+        self.assertContains(response, 'name="user_permissions"')
+        self.assertContains(response, "Important dates")
+        self.assertNotContains(response, "FuelLedger access")
 
     def test_site_user_admin_uses_native_forms_with_site_scoped_records(self):
         self.site_user.fuel_profile.can_manage_users = True
@@ -787,27 +800,20 @@ class SiteAccessTests(TestCase):
         self.assertEqual(add_user_page.status_code, 200)
         self.assertContains(add_user_page, 'name="password1"')
         self.assertContains(add_user_page, 'name="password2"')
+        self.assertContains(add_user_page, 'name="user_permissions"')
+        self.assertNotContains(add_user_page, "FuelLedger access")
         self.assertNotContains(add_user_page, "Superuser status")
-        user_formset = add_user_page.context["inline_admin_formsets"][0].formset
-        user_inline = user_formset.forms[0]
         user_data = {
             "username": "django-site-member",
             "password1": "safe-test-password-123",
             "password2": "safe-test-password-123",
-            f"{user_formset.prefix}-TOTAL_FORMS": "1",
-            f"{user_formset.prefix}-INITIAL_FORMS": "0",
-            f"{user_formset.prefix}-MIN_NUM_FORMS": "0",
-            f"{user_formset.prefix}-MAX_NUM_FORMS": "1",
-            user_inline["role"].html_name: UserProfile.Role.SITE,
-            user_inline["site"].html_name: str(self.site_one.pk),
-            user_inline["form_permissions"].html_name: ["cash-up"],
         }
         add_user_response = self.client.post(add_user_entry["Location"], user_data)
         self.assertEqual(add_user_response.status_code, 302)
         new_site_user = User.objects.get(username="django-site-member")
         self.assertEqual(new_site_user.fuel_profile.site, self.site_one)
         self.assertEqual(new_site_user.fuel_profile.role, UserProfile.Role.SITE)
-        self.assertEqual(new_site_user.fuel_profile.form_permissions, ["cash-up"])
+        self.assertEqual(new_site_user.fuel_profile.form_permissions, ["book-in-fuel", "tank-reading", "mechanical-readings", "electronic-readings", "cash-up"])
 
         groups_entry = self.client.get(reverse("site-admin-groups", args=[self.site_one.slug]))
         self.assertEqual(groups_entry.status_code, 302)
