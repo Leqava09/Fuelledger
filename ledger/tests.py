@@ -1,4 +1,7 @@
+from io import BytesIO
+import json
 import re
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 from html import unescape
@@ -6,15 +9,18 @@ from datetime import timedelta
 
 from django.contrib import admin
 from django.contrib.auth.models import User
-from django.test import Client, TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
+from PIL import Image
 
 from ledger.calculations import FormulaError, calculate_values, validate_formula
 from ledger.admin import CashUpAdditionalInline, EFTDrivewayInline, ManualShopPointInline, NozzleInlineForm, SiteAdmin, SiteAdminForm, SpeedPointInlineForm, TankInlineForm
 from ledger.models import (
     CashUpAdditional,
     CashUpField,
+    CashUpShiftRecord,
     DailyFuelReading,
     FuelBooking,
     ManualShopPoint,
@@ -48,6 +54,15 @@ class CalculationTests(TestCase):
 
 
 class SiteConfigurationAdminTests(TestCase):
+    def test_admin_home_redirects_to_hq_home(self):
+        admin_user = User.objects.create_superuser(username="home-admin", password="test-pass-123", email="home-admin@example.com")
+        client = Client()
+        client.force_login(admin_user)
+
+        response = client.get(reverse("admin:index"))
+
+        self.assertRedirects(response, reverse("hq-dashboard"), fetch_redirect_response=False)
+
     def test_grappelli_site_form_contains_contact_fields_and_nested_tank_nozzle_inlines(self):
         admin_user = User.objects.create_superuser(username="admin", password="test-pass-123", email="admin@example.com")
         client = Client()
@@ -60,6 +75,8 @@ class SiteConfigurationAdminTests(TestCase):
         self.assertContains(response, "Contact email")
         self.assertContains(response, "Contact Number")
         self.assertContains(response, "Currency")
+        self.assertContains(response, "Site picture")
+        self.assertContains(response, 'name="image"')
         self.assertContains(response, "Manager name")
         self.assertContains(response, "Site Name")
         self.assertContains(response, "Amount of shifts")
@@ -235,6 +252,14 @@ class SiteAccessTests(TestCase):
         self.hq_user = User.objects.create_user(username="hq", password="test-pass-123")
         UserProfile.objects.create(user=self.hq_user, role=UserProfile.Role.HQ)
 
+    def test_login_brand_panel_omits_goshen_label_and_uses_centered_layout(self):
+        response = self.client.get(reverse("login"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "FuelLedger")
+        self.assertContains(response, "login-aside")
+        self.assertNotContains(response, "Goshen Food Solutions")
+
     def test_site_user_is_limited_to_assigned_site_and_cannot_open_hq(self):
         self.client.force_login(self.site_user)
 
@@ -253,12 +278,57 @@ class SiteAccessTests(TestCase):
         self.client.force_login(self.hq_user)
 
         self.site_two.currency = "ZAR"
-        self.site_two.save(update_fields=["currency"])
+        self.site_two.manager_name = "Site Manager"
+        self.site_two.address = "1 Main Road"
+        self.site_two.contact_number = "0123456789"
+        self.site_two.contact_email = "site@example.com"
+        self.site_two.save(update_fields=["currency", "manager_name", "address", "contact_number", "contact_email"])
         self.assertEqual(self.client.get(reverse("hq-dashboard")).status_code, 200)
         response = self.client.get(reverse("site-dashboard", args=[self.site_two.slug]))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, reverse("hq-dashboard"))
-        self.assertContains(self.client.get(reverse("hq-dashboard")), "ZAR")
+        self.assertContains(response, "SITE")
+        self.assertNotContains(response, f"SITE NUMBER {self.site_two.pk}")
+        self.assertNotContains(response, "ZAR")
+        self.assertContains(response, "Site Manager")
+        self.assertContains(response, "1 Main Road")
+        self.assertContains(response, "0123456789")
+        self.assertContains(response, "site@example.com")
+        hq_response = self.client.get(reverse("hq-dashboard"))
+        self.assertNotContains(hq_response, "ZAR")
+        self.assertContains(hq_response, reverse("admin:auth_user_changelist"))
+        self.assertContains(hq_response, reverse("admin:auth_group_changelist"))
+        self.assertNotContains(hq_response, reverse("site-users", args=[self.site_two.slug]))
+        self.assertContains(hq_response, reverse("admin:ledger_site_changelist"))
+        self.assertContains(hq_response, "hq-site-card")
+        self.assertContains(hq_response, self.site_two.name)
+        self.assertEqual(hq_response.content.decode().count(f'class="hq-site-picture-title">{self.site_two.name}</span>'), 1)
+        self.assertNotContains(hq_response, f"<h3>{self.site_two.name}</h3>")
+        self.assertNotContains(hq_response, f"SITE {self.site_two.pk}")
+        self.assertNotContains(hq_response, "Users and groups")
+        self.assertNotContains(hq_response, "Latest submissions")
+        self.assertEqual(self.client.get(reverse("site-users", args=[self.site_two.slug])).status_code, 200)
+        self.assertEqual(self.client.get(reverse("site-groups", args=[self.site_two.slug])).status_code, 200)
+        self.assertEqual(self.client.get(reverse("admin:ledger_site_changelist")).status_code, 200)
+        self.assertEqual(self.client.get(reverse("admin:ledger_site_change", args=[self.site_two.pk])).status_code, 200)
+        self.assertEqual(self.client.get(reverse("admin:auth_user_changelist")).status_code, 200)
+        self.assertEqual(self.client.get(reverse("admin:auth_group_changelist")).status_code, 200)
+        self.assertEqual(self.client.get(reverse("admin:ledger_site_delete", args=[self.site_two.pk])).status_code, 403)
+
+    def test_uploaded_site_picture_is_displayed_on_its_site_dashboard(self):
+        image_file = BytesIO()
+        Image.new("RGB", (1, 1), color="teal").save(image_file, format="PNG")
+        image_file.seek(0)
+        self.client.force_login(self.hq_user)
+        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            self.site_one.image.save("site.png", SimpleUploadedFile("site.png", image_file.read(), content_type="image/png"))
+            response = self.client.get(reverse("site-dashboard", args=[self.site_one.slug]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "has-site-picture")
+        self.assertContains(response, self.site_one.image.url)
+        hq_response = self.client.get(reverse("hq-dashboard"))
+        self.assertContains(hq_response, f'class="hq-site-picture-title">{self.site_one.name}</span>')
 
     def test_retired_cashup_form_builder_is_not_available(self):
         self.site_user.fuel_profile.can_configure = True
@@ -299,11 +369,13 @@ class SiteAccessTests(TestCase):
         self.assertNotContains(past_response, f"/sites/{self.site_one.slug}/forms/")
 
         selected_shift = self.client.get(url, {"date": selected_date.isoformat(), "shift": "Day"})
-        for key in ("book-in-fuel", "cash-up"):
+        for key in ("book-in-fuel",):
             self.assertContains(
                 selected_shift,
                 f"/sites/{self.site_one.slug}/forms/{key}/?date={selected_date.isoformat()}&amp;shift=Day",
             )
+        self.assertContains(selected_shift, f"/sites/{self.site_one.slug}/forms/cash-up/cash/?date={selected_date.isoformat()}&amp;shift=Day")
+        self.assertNotContains(selected_shift, f"/sites/{self.site_one.slug}/forms/cash-up/?")
         for reading_type in ("tank-reading", "mechanical-readings", "electronic-readings"):
             self.assertContains(
                 selected_shift,
@@ -328,16 +400,20 @@ class SiteAccessTests(TestCase):
         shift_page = self.client.get(url, {"date": selected_date.isoformat(), "shift": "Morning"})
         self.assertEqual(shift_page.status_code, 200)
         self.assertContains(shift_page, "Morning shift")
-        self.assertContains(shift_page, f'?date={selected_date.isoformat()}"')
-        self.assertContains(shift_page, "Change shift")
+        self.assertContains(shift_page, 'id="site-shift"')
+        self.assertContains(shift_page, 'name="date"')
+        self.assertContains(shift_page, 'option value="Morning" selected')
         dashboard_html = shift_page.content.decode()
-        self.assertLess(dashboard_html.index("Users and groups"), dashboard_html.index('<section class="date-workspace">'))
-        self.assertLess(dashboard_html.index("History"), dashboard_html.index('<section class="date-workspace">'))
-        for key in ("book-in-fuel", "cash-up"):
+        date_workspace_index = dashboard_html.index('<section class="date-workspace"')
+        self.assertLess(dashboard_html.index("Users and groups"), date_workspace_index)
+        self.assertLess(dashboard_html.index("History"), date_workspace_index)
+        for key in ("book-in-fuel",):
             self.assertContains(
                 shift_page,
                 f"/sites/{self.site_one.slug}/forms/{key}/?date={selected_date.isoformat()}&amp;shift=Morning",
             )
+        self.assertContains(shift_page, f"/sites/{self.site_one.slug}/forms/cash-up/cash/?date={selected_date.isoformat()}&amp;shift=Morning")
+        self.assertNotContains(shift_page, f"/sites/{self.site_one.slug}/forms/cash-up/?")
         self.assertContains(shift_page, "Fuel Readings")
         for reading_type in ("tank-reading", "mechanical-readings", "electronic-readings"):
             self.assertContains(
@@ -546,6 +622,8 @@ class SiteAccessTests(TestCase):
         created_user = User.objects.get(username="site-operator")
         self.assertEqual(created_user.fuel_profile.site, self.site_one)
         self.assertIn(created_user, group.users.all())
+        self.assertIn(group.django_group, created_user.groups.all())
+        self.assertIn(created_user, group.django_group.user_set.all())
         self.assertEqual(self.site_one.audit_events.count(), 2)
         self.assertContains(self.client.get(reverse("site-history", args=[self.site_one.slug])), "Site group")
         self.assertContains(self.client.get(reverse("site-history", args=[self.site_one.slug])), "Site user")
@@ -584,10 +662,105 @@ class SiteAccessTests(TestCase):
         target.refresh_from_db()
         self.assertEqual(target.first_name, "Updated")
         self.assertIn(group, target.fuel_site_groups.all())
+        self.assertIn(group.django_group, target.groups.all())
         self.assertEqual(target.fuel_profile.form_permissions, ["book-in-fuel"])
         self.assertTrue(target.fuel_profile.can_configure)
         self.assertFalse(target.fuel_profile.can_manage_users)
         self.assertTrue(self.site_one.audit_events.filter(category="Site user", object_label="site-target", action="changed").exists())
+
+    def test_site_user_admin_uses_native_forms_with_site_scoped_records(self):
+        self.site_user.fuel_profile.can_manage_users = True
+        self.site_user.fuel_profile.save(update_fields=["can_manage_users"])
+        site_group = SiteGroup.objects.create(site=self.site_one, name="Site one team")
+        other_group = SiteGroup.objects.create(site=self.site_two, name="Site two team")
+        local_user = User.objects.create_user(username="local-member", password="test-pass-123")
+        UserProfile.objects.create(user=local_user, role=UserProfile.Role.SITE, site=self.site_one)
+        remote_user = User.objects.create_user(username="remote-member", password="test-pass-123")
+        UserProfile.objects.create(user=remote_user, role=UserProfile.Role.SITE, site=self.site_two)
+        site_group.users.add(local_user)
+        other_group.users.add(remote_user)
+        site_group.django_group.user_set.add(local_user)
+        other_group.django_group.user_set.add(remote_user)
+        self.client.force_login(self.site_user)
+
+        users_entry = self.client.get(reverse("site-admin-users", args=[self.site_one.slug]))
+        self.assertEqual(users_entry.status_code, 302)
+        self.assertEqual(users_entry["Location"], reverse("site_admin:auth_user_changelist"))
+        users_page = self.client.get(users_entry["Location"])
+        self.assertEqual(users_page.status_code, 200)
+        home_response = self.client.get(reverse("site_admin:index"))
+        self.assertRedirects(home_response, reverse("site-dashboard", args=[self.site_one.slug]), fetch_redirect_response=False)
+        self.assertContains(users_page, "local-member")
+        self.assertNotContains(users_page, "remote-member")
+        self.assertEqual(self.client.get(reverse("site-admin-user-edit", args=[self.site_one.slug, remote_user.pk])).status_code, 404)
+        native_user_edit = self.client.get(reverse("site_admin:auth_user_change", args=[local_user.pk]))
+        self.assertEqual(native_user_edit.status_code, 200)
+        self.assertContains(native_user_edit, site_group.django_group.name)
+        self.assertNotContains(native_user_edit, other_group.django_group.name)
+        add_user_entry = self.client.get(reverse("site-admin-user-add", args=[self.site_one.slug]))
+        add_user_page = self.client.get(add_user_entry["Location"])
+        self.assertEqual(add_user_page.status_code, 200)
+        self.assertContains(add_user_page, 'name="password1"')
+        self.assertContains(add_user_page, 'name="password2"')
+        self.assertNotContains(add_user_page, "Superuser status")
+        user_formset = add_user_page.context["inline_admin_formsets"][0].formset
+        user_inline = user_formset.forms[0]
+        user_data = {
+            "username": "django-site-member",
+            "password1": "safe-test-password-123",
+            "password2": "safe-test-password-123",
+            f"{user_formset.prefix}-TOTAL_FORMS": "1",
+            f"{user_formset.prefix}-INITIAL_FORMS": "0",
+            f"{user_formset.prefix}-MIN_NUM_FORMS": "0",
+            f"{user_formset.prefix}-MAX_NUM_FORMS": "1",
+            user_inline["role"].html_name: UserProfile.Role.SITE,
+            user_inline["site"].html_name: str(self.site_one.pk),
+            user_inline["form_permissions"].html_name: ["cash-up"],
+        }
+        add_user_response = self.client.post(add_user_entry["Location"], user_data)
+        self.assertEqual(add_user_response.status_code, 302)
+        new_site_user = User.objects.get(username="django-site-member")
+        self.assertEqual(new_site_user.fuel_profile.site, self.site_one)
+        self.assertEqual(new_site_user.fuel_profile.role, UserProfile.Role.SITE)
+        self.assertEqual(new_site_user.fuel_profile.form_permissions, ["cash-up"])
+
+        groups_entry = self.client.get(reverse("site-admin-groups", args=[self.site_one.slug]))
+        self.assertEqual(groups_entry.status_code, 302)
+        groups_page = self.client.get(groups_entry["Location"])
+        self.assertEqual(groups_page.status_code, 200)
+        self.assertContains(groups_page, site_group.django_group.name)
+        self.assertNotContains(groups_page, other_group.django_group.name)
+        add_group_page = self.client.get(reverse("site_admin:auth_group_add"))
+        self.assertEqual(add_group_page.status_code, 200)
+        self.assertContains(add_group_page, "FuelLedger site access")
+        group_formset = add_group_page.context["inline_admin_formsets"][0].formset
+        self.assertIn("form_permissions", group_formset.forms[0].fields)
+        group_form = group_formset.forms[0]
+        group_data = {
+            "name": "Site one native group",
+            f"{group_formset.prefix}-TOTAL_FORMS": "1",
+            f"{group_formset.prefix}-INITIAL_FORMS": "0",
+            f"{group_formset.prefix}-MIN_NUM_FORMS": "0",
+            f"{group_formset.prefix}-MAX_NUM_FORMS": "1",
+            group_form["site"].html_name: str(self.site_one.pk),
+            group_form["name"].html_name: "Native operators",
+            group_form["form_permissions"].html_name: ["cash-up"],
+        }
+        add_group_response = self.client.post(reverse("site_admin:auth_group_add"), group_data)
+        self.assertEqual(add_group_response.status_code, 302)
+        native_site_group = SiteGroup.objects.get(site=self.site_one, name="Native operators")
+        self.assertEqual(native_site_group.form_permissions, ["cash-up"])
+        self.assertEqual(native_site_group.django_group.name, f"Site {self.site_one.pk} - Native operators")
+        self.assertEqual(self.client.get("/site-admin/auth/user/").status_code, 200)
+
+    def test_site_manager_cannot_enter_native_admin_for_another_site(self):
+        self.site_user.fuel_profile.can_manage_users = True
+        self.site_user.fuel_profile.save(update_fields=["can_manage_users"])
+        self.client.force_login(self.site_user)
+
+        response = self.client.get(reverse("site-admin-users", args=[self.site_two.slug]))
+
+        self.assertEqual(response.status_code, 403)
 
     def test_site_group_grants_are_site_scoped_and_control_form_access(self):
         self.site_user.fuel_profile.can_manage_users = True
@@ -604,6 +777,7 @@ class SiteAccessTests(TestCase):
         self.assertEqual(response.status_code, 302)
         group = SiteGroup.objects.get(site=self.site_one, name="Book-in operators")
         self.assertEqual(group.form_permissions, ["book-in-fuel"])
+        self.assertIn(self.site_user, group.django_group.user_set.all())
         dashboard = self.client.get(reverse("site-dashboard", args=[self.site_one.slug]), {
             "date": timezone.localdate().isoformat(),
             "shift": "Day",
@@ -680,6 +854,10 @@ class SiteAccessTests(TestCase):
         self.assertNotContains(response, "TRUCK-OLD")
         self.assertNotContains(response, "Daily Fuel Readings")
         self.assertContains(response, "Book IN Fuel history")
+        self.assertContains(response, "history-table")
+        self.assertContains(response, "<th>Action</th>")
+        self.assertContains(response, "Reference: TRUCK-A")
+        self.assertNotContains(response, "View changes")
 
     def test_site_history_excludes_hq_configuration_events(self):
         self.client.force_login(self.site_user)
@@ -820,3 +998,261 @@ class DailyFuelReadingWorkflowTests(TestCase):
             html = response.content.decode()
             positions = [html.index(f">{name}</td>") for name in ("Nozzle 1", "Nozzle 2", "Nozzle 3", "Nozzle 10")]
             self.assertEqual(positions, sorted(positions))
+
+
+class CashUpWorkflowTests(TestCase):
+    def setUp(self):
+        self.site = Site.objects.create(name="Cash Up Site", currency="ZAR", shift_count=2)
+        self.user = User.objects.create_user(username="cashup-user", password="test-pass-123")
+        UserProfile.objects.create(user=self.user, role=UserProfile.Role.SITE, site=self.site)
+        self.client = Client()
+        self.client.force_login(self.user)
+        self.business_date = timezone.localdate() - timedelta(days=1)
+
+    def cash_up_url(self, section):
+        return reverse("cash-up-entry", args=[self.site.slug, section])
+
+    def cash_up_query(self):
+        return {"date": self.business_date.isoformat(), "shift": "Night"}
+
+    def test_cash_up_tabs_are_shown_on_dashboard_and_entry_page(self):
+        dashboard = self.client.get(
+            reverse("site-dashboard", args=[self.site.slug]),
+            self.cash_up_query(),
+        )
+        self.assertEqual(dashboard.status_code, 200)
+        cash_page = self.client.get(self.cash_up_url("cash"), self.cash_up_query())
+        self.assertEqual(cash_page.status_code, 200)
+        for section, label in (
+            ("cash", "Cash"),
+            ("vouchers", "Vouchers"),
+            ("airtime", "Airtime"),
+            ("sales-account", "Sales Account"),
+            ("payouts", "Payouts"),
+            ("eft-driveway", "EFT/Driveway"),
+            ("manual-shop", "Manual/Shop"),
+            ("cash-up-additional", "Additional"),
+        ):
+            self.assertContains(dashboard, self.cash_up_url(section))
+            self.assertContains(cash_page, label)
+        self.assertContains(cash_page, "Coins")
+        self.assertContains(cash_page, "Safedrops")
+        self.assertContains(cash_page, 'class="currency-prefix">ZAR</span>')
+        self.assertContains(cash_page, "js/cash_up.js")
+        self.assertNotContains(cash_page, "<h2>Cash</h2>")
+        self.assertContains(cash_page, "Save and Continue")
+        self.assertContains(cash_page, "Save and Exit")
+        self.assertContains(cash_page, ">Return</a>")
+        self.assertEqual(cash_page.content.decode().count('value="continue"'), 1)
+        self.assertEqual(cash_page.content.decode().count('value="exit"'), 1)
+        self.assertEqual(cash_page.content.decode().count('value="tab"'), 1)
+        cash_page_html = cash_page.content.decode()
+        self.assertLess(cash_page_html.index("cash-up-actions--top"), cash_page_html.index('aria-label="Cash up sections"'))
+        self.assertContains(cash_page, "cash-up-page-heading")
+        self.assertContains(cash_page, "cash-up-form")
+
+    def test_cash_coins_and_safedrops_are_saved_and_totalled(self):
+        response = self.client.post(
+            f"{self.cash_up_url('cash')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                "coins": "10.25",
+                "safedrops": "2.50",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
+        self.assertEqual(record.values["coins"], "10.25")
+        self.assertEqual(record.values["safedrops"], "2.50")
+        reopened = self.client.get(self.cash_up_url("cash"), self.cash_up_query())
+        self.assertContains(reopened, "12.75")
+        self.assertContains(reopened, 'value="10.25"')
+
+    def test_vouchers_and_payouts_accept_multiple_rows_and_store_shift_totals(self):
+        for section, prefix, count_key, values, expected_total in (
+            ("vouchers", "voucher", "voucher_count", ("5.25", "7.00"), "12.25"),
+            ("payouts", "payout", "payout_count", ("2.00", "3.50"), "5.50"),
+        ):
+            page = self.client.get(self.cash_up_url(section), self.cash_up_query())
+            self.assertContains(page, f'data-add-repeat="{section}"')
+            self.assertContains(page, 'max="100000000"')
+            post_data = {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                count_key: "2",
+                f"{prefix}_1": values[0],
+                f"{prefix}_2": values[1],
+            }
+            response = self.client.post(
+                f"{self.cash_up_url(section)}?date={self.business_date.isoformat()}&shift=Night",
+                post_data,
+            )
+            self.assertEqual(response.status_code, 302)
+            record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
+            self.assertEqual(record.values["totals"][section], expected_total)
+            reopened = self.client.get(self.cash_up_url(section), self.cash_up_query())
+            self.assertContains(reopened, expected_total)
+            self.assertContains(reopened, f'name="{prefix}_2"')
+
+    def test_money_fields_reject_amounts_over_one_hundred_million(self):
+        response = self.client.post(
+            f"{self.cash_up_url('cash')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                "coins": "100000000.01",
+                "safedrops": "0",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Ensure this value is less than or equal to 100000000.")
+        self.assertFalse(CashUpShiftRecord.objects.filter(site=self.site, business_date=self.business_date).exists())
+
+    def test_airtime_shift_number_has_no_currency_and_amounts_use_site_currency(self):
+        response = self.client.get(self.cash_up_url("airtime"), self.cash_up_query())
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Airtime Shift Number")
+        self.assertContains(response, "Airtime Slip")
+        self.assertContains(response, "Airtime System")
+        self.assertContains(response, "Airtime Balance")
+        self.assertContains(response, "Airtime Loaded")
+        self.assertContains(response, 'maxlength="10"')
+        self.assertContains(response, 'class="airtime-shift-number-input"')
+        self.assertContains(response, "Difference")
+        self.assertEqual(response.content.decode().count('class="currency-prefix">ZAR</span>'), 6)
+        self.assertEqual(self.client.post(
+            f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                "airtime_shift_nr": "SHIFT-9",
+                "airtime_slip": "8.50",
+            },
+        ).status_code, 302)
+        record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
+        self.assertEqual(record.values["airtime_shift_nr"], "SHIFT-9")
+        self.assertEqual(record.values["airtime_slip"], "8.50")
+        self.assertContains(response, "Total Airtime")
+        self.assertNotContains(response, "Total Airtime Loaded")
+
+    def test_save_and_continue_saves_current_tab_and_opens_next_tab(self):
+        response = self.client.post(
+            f"{self.cash_up_url('cash')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                "save_mode": "continue",
+                "coins": "9.00",
+                "safedrops": "4.00",
+            },
+        )
+        self.assertRedirects(
+            response,
+            f"{self.cash_up_url('vouchers')}?date={self.business_date.isoformat()}&shift=Night&saved=cash",
+            fetch_redirect_response=False,
+        )
+        record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
+        self.assertEqual(record.values["coins"], "9.00")
+        self.assertEqual(record.values["totals"]["cash"], "13.00")
+
+    def test_save_and_exit_saves_drafts_from_all_tabs(self):
+        all_tab_values = {
+            "cash": {"coins": "15.00", "safedrops": "6.00"},
+            "vouchers": {"voucher_count": "2", "voucher_1": "3.00", "voucher_2": "2.00"},
+            "airtime": {"airtime_shift_nr": "SHIFT12345", "airtime_loaded": "11.00"},
+        }
+        response = self.client.post(
+            f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                "save_mode": "exit",
+                "airtime_shift_nr": "SHIFT12345",
+                "all_tab_values": json.dumps(all_tab_values),
+            },
+        )
+        self.assertRedirects(
+            response,
+            f"{reverse('site-dashboard', args=[self.site.slug])}?date={self.business_date.isoformat()}&shift=Night&cashup_saved=all",
+            fetch_redirect_response=False,
+        )
+        record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
+        self.assertEqual(record.values["coins"], "15.00")
+        self.assertEqual(record.values["safedrops"], "6.00")
+        self.assertEqual(record.values["voucher_2"], "2.00")
+        self.assertEqual(record.values["airtime_loaded"], "11.00")
+        self.assertEqual(record.values["totals"]["cash"], "21.00")
+        self.assertEqual(record.values["totals"]["vouchers"], "5.00")
+
+    def test_configured_machine_and_additional_fields_are_dynamic_and_preserved(self):
+        eft_point = SpeedPoint.objects.create(site=self.site, point_id="EFT-3", serial_number="DRIVE-3")
+        manual_point = ManualShopPoint.objects.create(site=self.site, point_id="SHOP-2", serial_number="MANUAL-2")
+        additional = CashUpAdditional.objects.create(site=self.site, additional_field="Till variance")
+        for section, label in (("eft-driveway", "EFT/Driveway DRIVE-3"), ("manual-shop", "Manual/Shop MANUAL-2"), ("cash-up-additional", "Till variance")):
+            page = self.client.get(self.cash_up_url(section), self.cash_up_query())
+            self.assertContains(page, label)
+            self.assertContains(page, 'class="cash-up-fields cash-up-fields--stacked"')
+            self.assertContains(page, 'data-cash-up-total="')
+        eft_page = self.client.get(self.cash_up_url("eft-driveway"), self.cash_up_query())
+        self.assertNotContains(eft_page, "EFT-3")
+        self.assertContains(eft_page, 'class="currency-prefix">ZAR</span>')
+        self.assertEqual(self.client.post(
+            f"{self.cash_up_url('eft-driveway')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                f"eft_{eft_point.pk}": "100.00",
+            },
+        ).status_code, 302)
+        self.assertEqual(self.client.post(
+            f"{self.cash_up_url('manual-shop')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                f"manual_{manual_point.pk}": "55.25",
+            },
+        ).status_code, 302)
+        self.assertEqual(self.client.post(
+            f"{self.cash_up_url('cash-up-additional')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                f"additional_{additional.pk}": "3.75",
+            },
+        ).status_code, 302)
+        record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
+        self.assertEqual(record.values[f"eft_{eft_point.pk}"], "100.00")
+        self.assertEqual(record.values[f"manual_{manual_point.pk}"], "55.25")
+        self.assertEqual(record.values[f"additional_{additional.pk}"], "3.75")
+
+    def test_sales_account_total_and_airtime_difference_start_from_saved_values(self):
+        self.client.post(
+            f"{self.cash_up_url('sales-account')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                "sales_account_count": "2",
+                "sales_account_1": "20.00",
+                "sales_account_2": "5.00",
+                "arrears_account_count": "2",
+                "arrears_account_1": "7.50",
+                "arrears_account_2": "2.50",
+            },
+        )
+        sales_page = self.client.get(self.cash_up_url("sales-account"), self.cash_up_query())
+        self.assertContains(sales_page, "35.00")
+        self.assertContains(sales_page, "25.00")
+        self.assertContains(sales_page, "10.00")
+        self.assertContains(sales_page, 'class="cash-up-fields cash-up-fields--stacked"')
+        self.client.post(
+            f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                "airtime_slip": "20.00",
+                "airtime_system": "13.75",
+            },
+        )
+        airtime_page = self.client.get(self.cash_up_url("airtime"), self.cash_up_query())
+        self.assertContains(airtime_page, "6.25")

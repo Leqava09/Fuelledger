@@ -1,4 +1,6 @@
+import json
 from datetime import date
+from decimal import Decimal
 
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
@@ -11,6 +13,7 @@ from django.contrib.auth.models import User
 
 from .forms import (
 	BookInFuelForm,
+	CashUpEntryForm,
 	ElectronicReadingForm,
 	MechanicalReadingForm,
 	SiteGroupForm,
@@ -19,6 +22,7 @@ from .forms import (
 	SiteUserCreateForm,
 )
 from .models import (
+	CashUpShiftRecord,
 	DailyFuelReading,
 	FuelBooking,
 	NozzleFuelReading,
@@ -42,6 +46,16 @@ FUEL_READING_FORM_LABELS = {
 	"mechanical-readings": "Mechanical Readings",
 	"electronic-readings": "Electronic Readings",
 }
+CASH_UP_TAB_LABELS = (
+	("cash", "Cash"),
+	("vouchers", "Vouchers"),
+	("airtime", "Airtime"),
+	("sales-account", "Sales Account"),
+	("payouts", "Payouts"),
+	("eft-driveway", "EFT/Driveway"),
+	("manual-shop", "Manual/Shop"),
+	("cash-up-additional", "Additional"),
+)
 
 
 def _selected_business_date(request):
@@ -121,8 +135,7 @@ def hq_dashboard(request):
 	if not request.user.is_superuser and (not _profile(request.user) or _profile(request.user).role != "HQ"):
 		return HttpResponseForbidden("HQ access is restricted to HQ users.")
 	sites = Site.objects.filter(is_active=True).order_by("name")
-	recent_entries = ShiftEntry.objects.select_related("site", "created_by")[:10]
-	return render(request, "ledger/hq_dashboard.html", {"sites": sites, "recent_entries": recent_entries})
+	return render(request, "ledger/hq_dashboard.html", {"sites": sites})
 
 
 @login_required
@@ -146,13 +159,17 @@ def site_dashboard(request, slug):
 		"site_forms": {
 			key: label
 			for key, label in SITE_FORM_LABELS.items()
-			if key != "daily-fuel-readings" and key in permissions
+			if key not in {"daily-fuel-readings", "cash-up"} and key in permissions
 		},
 		"fuel_reading_forms": [
 			{"key": key, "label": label}
 			for key, label in FUEL_READING_FORM_LABELS.items()
 			if key in permissions
 		],
+		"cash_up_tabs": [
+			{"key": key, "label": tab_label}
+			for key, tab_label in CASH_UP_TAB_LABELS
+		] if "cash-up" in permissions else [],
 		"can_manage_users": _can_manage_site_users(request.user, site),
 		"history_count": site.audit_events.count(),
 	})
@@ -174,6 +191,8 @@ def blank_site_form(request, slug, form_key):
 		return _book_in_fuel(request, label, selected_date, today, shift_label)
 	if form_key == "daily-fuel-readings":
 		return redirect(f"{reverse('site-dashboard', args=[site.slug])}?date={selected_date.isoformat()}&shift={shift_label}")
+	if form_key == "cash-up":
+		return _cash_up_entry(request, selected_date, shift_label, "cash")
 	return render(request, "ledger/blank_site_form.html", {
 		"site": site,
 		"form_key": form_key,
@@ -288,6 +307,225 @@ def _book_in_fuel(request, label, selected_date, today, shift_label):
 		"visible_delivery_count": visible_delivery_count,
 		"tanks_data": [{"id": tank.pk, "name": tank.name, "product": tank.product} for tank in tanks],
 	})
+
+
+@login_required
+def cash_up_entry(request, slug, section):
+	section_label = dict(CASH_UP_TAB_LABELS).get(section)
+	if section_label is None:
+		raise Http404
+	site = request.current_site
+	if not _can_access_site_form(request.user, site, "cash-up"):
+		return HttpResponseForbidden("Your account cannot access this form at this site.")
+	selected_date, _ = _selected_business_date(request)
+	shift_label = request.POST.get("shift_label") or request.GET.get("shift", "")
+	if shift_label not in site.get_shift_names():
+		return redirect(f"{reverse('site-dashboard', args=[site.slug])}?date={selected_date.isoformat()}")
+	return _cash_up_entry(request, selected_date, shift_label, section)
+
+
+def _cash_up_entry(request, selected_date, shift_label, section):
+	site = request.current_site
+	record = CashUpShiftRecord.objects.filter(site=site, business_date=selected_date, shift_label=shift_label).first()
+	initial_values = record.values if record else {}
+	form = CashUpEntryForm(
+		site,
+		section,
+		data=request.POST if request.method == "POST" else None,
+		initial={"business_date": selected_date, "shift_label": shift_label},
+		initial_values=initial_values,
+	)
+	if request.method == "POST":
+		save_mode = request.POST.get("save_mode", "tab")
+		if save_mode == "exit":
+			try:
+				all_tab_values = json.loads(request.POST.get("all_tab_values") or "{}")
+			except (TypeError, ValueError):
+				all_tab_values = {}
+			if not isinstance(all_tab_values, dict):
+				all_tab_values = {}
+			current_values = {
+				key: value
+				for key, value in request.POST.items()
+				if key not in {"csrfmiddlewaretoken", "save_mode", "all_tab_values"}
+			}
+			all_tab_values[section] = {**all_tab_values.get(section, {}), **current_values}
+			updated_values = dict(initial_values)
+			validation_errors = []
+			for tab_key, _ in CASH_UP_TAB_LABELS:
+				tab_values = all_tab_values.get(tab_key)
+				if not isinstance(tab_values, dict):
+					continue
+				data = {
+					**tab_values,
+					"business_date": selected_date.isoformat(),
+					"shift_label": shift_label,
+				}
+				tab_form = CashUpEntryForm(site, tab_key, data=data, initial_values=updated_values)
+				if not tab_form.is_valid():
+					validation_errors.append(section_label_for(tab_key))
+					continue
+				updated_values = _apply_cash_up_form_values(updated_values, tab_form)
+			if validation_errors:
+				form.add_error(None, "Check the invalid entries in these sections before saving all: " + ", ".join(validation_errors))
+			else:
+				return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, "exit", section)
+		elif form.is_valid():
+			updated_values = _apply_cash_up_form_values(initial_values, form)
+			return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, save_mode, section)
+	else:
+		save_mode = "tab"
+	totals = _cash_up_totals(initial_values)
+	total_group_prefixes = {
+		"eft-driveway": "eft_",
+		"manual-shop": "manual_",
+		"cash-up-additional": "additional_",
+	}
+	airtime_difference = Decimal(str(initial_values.get("airtime_slip") or 0)) - Decimal(str(initial_values.get("airtime_system") or 0))
+	group_totals = {
+		"cash": totals["cash"],
+		"vouchers": totals["vouchers"],
+		"sales_account": totals["sales_account"],
+		"arrears_account": totals["arrears_account"],
+		"payouts": totals["payouts"],
+		"eft-driveway": totals["eft_driveway"],
+		"manual-shop": totals["manual_shop"],
+		"cash-up-additional": totals["cash_up_additional"],
+	}
+	repeat_groups = [
+		{
+			**group,
+			"count_field": form[group["count_key"]],
+			"total": group_totals[group["key"]],
+		}
+		for group in form.repeat_groups
+	]
+	return render(request, "ledger/cash_up.html", {
+		"site": site,
+		"form": form,
+		"section": section,
+		"section_label": section_label_for(section),
+		"selected_date": selected_date,
+		"shift_label": shift_label,
+		"cash_up_tabs": [
+			{"key": key, "label": label}
+			for key, label in CASH_UP_TAB_LABELS
+		],
+		"total_amount": group_totals.get(section, Decimal("0")),
+		"group_totals": group_totals,
+		"sales_combined_total": totals["sales_accounts_combined"],
+		"repeat_groups": repeat_groups,
+		"airtime_difference": airtime_difference,
+		"show_total": section in {"cash", "vouchers", "sales-account", "payouts", *total_group_prefixes},
+		"total_group": section,
+		"field_rows": [(label, form[key]) for key, label in form.entry_fields],
+		"draft_key": f"{request.user.pk}:{site.pk}:{selected_date.isoformat()}:{shift_label}",
+	})
+
+
+def _apply_cash_up_form_values(values, form):
+	updated_values = dict(values)
+	for key, _ in form.entry_fields:
+		value = form.cleaned_data[key]
+		if value in (None, ""):
+			updated_values.pop(key, None)
+		else:
+			updated_values[key] = str(value)
+	repeat_counts = dict(updated_values.get("repeat_counts", {}))
+	for group in form.repeat_groups:
+		repeat_counts[group["key"]] = form.cleaned_data[group["count_key"]]
+		legacy_key = {
+			"vouchers": "vouchers",
+			"payouts": "payout",
+			"sales_account": "sales_account",
+			"arrears_account": "arrears_account",
+		}.get(group["key"])
+		if legacy_key:
+			updated_values.pop(legacy_key, None)
+	if repeat_counts:
+		updated_values["repeat_counts"] = repeat_counts
+	updated_values["totals"] = _cash_up_totals(updated_values)
+	return updated_values
+
+
+def _complete_cash_up_save(request, site, record, before, updated_values, selected_date, shift_label, save_mode, section):
+	with transaction.atomic():
+		if record is None:
+			record = CashUpShiftRecord.objects.create(
+				site=site,
+				business_date=selected_date,
+				shift_label=shift_label,
+				created_by=request.user,
+				values=updated_values,
+			)
+		else:
+			record.values = updated_values
+			record.save(update_fields=["values", "updated_at"])
+	_record_audit(
+		site,
+		request.user,
+		"Cash Up",
+		f"{selected_date.isoformat()} / {shift_label}",
+		"updated" if before else "created",
+		before=before,
+		after=updated_values,
+	)
+	if save_mode == "exit":
+		messages.success(request, "All cash-up sections saved.")
+		return redirect(
+			f"{reverse('site-dashboard', args=[site.slug])}"
+			f"?date={selected_date.isoformat()}&shift={shift_label}&cashup_saved=all"
+		)
+	if save_mode == "continue":
+		section_keys = [key for key, _ in CASH_UP_TAB_LABELS]
+		next_index = section_keys.index(section) + 1
+		if next_index < len(section_keys):
+			next_url = reverse("cash-up-entry", args=[site.slug, section_keys[next_index]])
+			return redirect(f"{next_url}?date={selected_date.isoformat()}&shift={shift_label}&saved={section}")
+		return redirect(
+			f"{reverse('site-dashboard', args=[site.slug])}"
+			f"?date={selected_date.isoformat()}&shift={shift_label}&cashup_saved={section}"
+		)
+	messages.success(request, f"{section_label_for(section)} saved.")
+	return redirect(
+		f"{reverse('cash-up-entry', args=[site.slug, section])}"
+		f"?date={selected_date.isoformat()}&shift={shift_label}&saved={section}"
+	)
+
+
+def _cash_up_totals(values):
+	def sum_group(prefix, legacy_key=None):
+		group_values = [
+			Decimal(str(value or 0))
+			for key, value in values.items()
+			if key.startswith(prefix) and key[len(prefix):].isdigit()
+		]
+		if not group_values and legacy_key:
+			legacy_value = values.get(legacy_key)
+			if legacy_value not in (None, ""):
+				group_values.append(Decimal(str(legacy_value)))
+		return sum(group_values, Decimal("0"))
+
+	cash = Decimal(str(values.get("coins") or 0)) + Decimal(str(values.get("safedrops") or 0))
+	sales_account = sum_group("sales_account_", "sales_account")
+	arrears_account = sum_group("arrears_account_", "arrears_account")
+	return {
+		"cash": str(cash),
+		"vouchers": str(sum_group("voucher_", "vouchers")),
+		"sales_account": str(sales_account),
+		"arrears_account": str(arrears_account),
+		"sales_accounts_combined": str(sales_account + arrears_account),
+		"payouts": str(sum_group("payout_", "payout")),
+		"airtime_loaded": str(Decimal(str(values.get("airtime_loaded") or 0))),
+		"eft_driveway": str(sum(Decimal(str(value or 0)) for key, value in values.items() if key.startswith("eft_"))),
+		"manual_shop": str(sum(Decimal(str(value or 0)) for key, value in values.items() if key.startswith("manual_"))),
+		"cash_up_additional": str(sum(Decimal(str(value or 0)) for key, value in values.items() if key.startswith("additional_"))),
+	}
+
+
+def section_label_for(section):
+	return dict(CASH_UP_TAB_LABELS)[section]
+
 
 @login_required
 def daily_fuel_reading_entry(request, slug):
@@ -480,6 +718,50 @@ def _require_site_user_manager(request):
 	return None
 
 
+def _sync_site_group_members(group):
+	if group.django_group_id:
+		group.django_group.user_set.set(group.users.all())
+
+
+@login_required
+def site_admin_users(request, slug, user_id=None):
+	denied = _require_site_user_manager(request)
+	if denied:
+		return denied
+	site = request.current_site
+	request.session["site_admin_site_id"] = site.pk
+	if user_id is None:
+		admin_url = reverse("site_admin:auth_user_changelist")
+	else:
+		get_object_or_404(User, pk=user_id, fuel_profile__site=site)
+		admin_url = reverse("site_admin:auth_user_change", args=[user_id])
+	return redirect(admin_url)
+
+
+@login_required
+def site_admin_user_add(request, slug):
+	denied = _require_site_user_manager(request)
+	if denied:
+		return denied
+	request.session["site_admin_site_id"] = request.current_site.pk
+	return redirect(reverse("site_admin:auth_user_add"))
+
+
+@login_required
+def site_admin_groups(request, slug, group_id=None):
+	denied = _require_site_user_manager(request)
+	if denied:
+		return denied
+	site = request.current_site
+	request.session["site_admin_site_id"] = site.pk
+	if group_id is None:
+		admin_url = reverse("site_admin:auth_group_changelist")
+	else:
+		get_object_or_404(SiteGroup, pk=group_id, site=site)
+		admin_url = reverse("site_admin:auth_group_change", args=[group_id])
+	return redirect(admin_url)
+
+
 def _site_user_snapshot(user):
 	profile = user.fuel_profile
 	return {
@@ -531,6 +813,7 @@ def site_user_create(request, slug):
 		)
 		for group in data["groups"]:
 			group.users.add(user)
+			_sync_site_group_members(group)
 		_record_audit(site, request.user, "Site user", user.username, "created", after=_site_user_snapshot(user))
 		messages.success(request, f"Site user {user.username} created.")
 		return redirect("site-users", slug=site.slug)
@@ -562,6 +845,8 @@ def site_user_edit(request, slug, user_id):
 		profile.can_manage_users = data["can_manage_users"]
 		profile.save(update_fields=["form_permissions", "can_configure", "can_manage_users"])
 		user.fuel_site_groups.set(data["groups"])
+		for group in SiteGroup.objects.filter(site=site).prefetch_related("users"):
+			_sync_site_group_members(group)
 		_record_audit(site, request.user, "Site user", user.username, "changed", before=before, after=_site_user_snapshot(user))
 		messages.success(request, f"Site user {user.username} updated.")
 		return redirect("site-users", slug=site.slug)
@@ -587,6 +872,7 @@ def site_groups(request, slug):
 			group.form_permissions = form.cleaned_data["form_permissions"]
 			group.save()
 			form.save_m2m()
+			_sync_site_group_members(group)
 			_record_audit(site, request.user, "Site group", group.name, "created", after={
 				"users": list(group.users.values_list("username", flat=True)),
 				"form_permissions": group.form_permissions,
@@ -620,6 +906,7 @@ def site_group_edit(request, slug, group_id):
 		updated_group.form_permissions = form.cleaned_data["form_permissions"]
 		updated_group.save()
 		form.save_m2m()
+		_sync_site_group_members(updated_group)
 		_record_audit(site, request.user, "Site group", updated_group.name, "changed", before=before, after={
 			"users": list(updated_group.users.values_list("username", flat=True)),
 			"form_permissions": updated_group.form_permissions,
@@ -633,7 +920,11 @@ def site_group_edit(request, slug, group_id):
 def site_history(request, slug):
 	site = request.current_site
 	events = site.audit_events.filter(origin=SiteAuditEvent.Origin.SITE).select_related("actor")
-	return render(request, "ledger/site_history.html", {"site": site, "events": events})
+	return render(request, "ledger/site_history.html", {
+		"site": site,
+		"events": events,
+		"history_rows": _history_rows(events),
+	})
 
 
 @login_required
@@ -666,11 +957,43 @@ def site_form_history(request, slug, form_key):
 	return render(request, "ledger/site_history.html", {
 		"site": site,
 		"events": events,
+		"history_rows": _history_rows(events),
 		"form_label": form_label,
 		"selected_date": selected_date,
 		"shift_label": shift_label,
 		"form_url": form_url,
 	})
+
+
+def _history_rows(events):
+	rows = []
+	for event in events:
+		before = event.before if isinstance(event.before, dict) else {}
+		after = event.after if isinstance(event.after, dict) else {}
+		changed = []
+		for key in dict.fromkeys([*before.keys(), *after.keys()]):
+			if key in {"totals", "repeat_counts"} or before.get(key) == after.get(key):
+				continue
+			label = key.replace("_", " ").strip().capitalize()
+			if key not in before:
+				change = f"{label}: {_history_value(after[key])}"
+			elif key not in after:
+				change = f"{label} removed"
+			else:
+				change = f"{label}: {_history_value(before[key])} -> {_history_value(after[key])}"
+			changed.append(change)
+		description = "; ".join(changed) or event.action.replace("_", " ").capitalize()
+		rows.append({"event": event, "description": description})
+	return rows
+
+
+def _history_value(value):
+	if isinstance(value, (dict, list)):
+		if isinstance(value, dict):
+			value = ", ".join(f"{key}: {_history_value(item)}" for key, item in value.items())
+		else:
+			value = "; ".join(_history_value(item) for item in value)
+	return str(value)
 
 
 @login_required

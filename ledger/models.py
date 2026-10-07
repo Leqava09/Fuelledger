@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.text import slugify
@@ -27,6 +28,7 @@ class Site(models.Model):
 	name = models.CharField(max_length=120, unique=True, verbose_name="Site Name")
 	slug = models.SlugField(max_length=140, unique=True, blank=True)
 	currency = models.CharField(max_length=5, blank=True, default="", verbose_name="Currency")
+	image = models.ImageField(upload_to="site_images/", blank=True, null=True, verbose_name="Site picture")
 	address = models.TextField(blank=True, verbose_name="Address")
 	contact_number = models.CharField(max_length=30, blank=True, verbose_name="Contact Number")
 	contact_email = models.EmailField(blank=True)
@@ -276,6 +278,29 @@ class ShiftEntry(models.Model):
 		return f"{self.site} / {self.business_date} / {self.shift_label}"
 
 
+class CashUpShiftRecord(models.Model):
+	site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="cash_up_records")
+	business_date = models.DateField()
+	shift_label = models.CharField(max_length=60)
+	created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="cash_up_records_created")
+	values = models.JSONField(default=dict, blank=True)
+	created_at = models.DateTimeField(auto_now_add=True)
+	updated_at = models.DateTimeField(auto_now=True)
+
+	class Meta:
+		ordering = ["-business_date", "shift_label"]
+		constraints = [
+			models.UniqueConstraint(fields=["site", "business_date", "shift_label"], name="unique_cashup_record_per_site_shift"),
+		]
+
+	def clean(self):
+		if self.site_id and self.shift_label not in self.site.get_shift_names():
+			raise ValidationError({"shift_label": "Select a shift configured for this site."})
+
+	def __str__(self):
+		return f"{self.site} / {self.business_date} / {self.shift_label}"
+
+
 class DailyFuelReading(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="daily_fuel_readings")
 	business_date = models.DateField()
@@ -325,6 +350,11 @@ class NozzleFuelReading(models.Model):
 
 class SiteGroup(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="groups")
+	django_group = models.OneToOneField(
+		"auth.Group",
+		on_delete=models.CASCADE,
+		related_name="fuel_site_group",
+	)
 	name = models.CharField(max_length=100)
 	users = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name="fuel_site_groups")
 	form_permissions = models.JSONField(default=list, blank=True)
@@ -335,6 +365,16 @@ class SiteGroup(models.Model):
 		constraints = [
 			models.UniqueConstraint(fields=["site", "name"], name="unique_site_group_name"),
 		]
+
+	def save(self, *args, **kwargs):
+		django_name = f"Site {self.site_id} - {self.name}"
+		if not self.django_group_id:
+			group, _ = Group.objects.get_or_create(name=django_name)
+			self.django_group = group
+		elif self.django_group.name != django_name:
+			self.django_group.name = django_name
+			self.django_group.save(update_fields=["name"])
+		super().save(*args, **kwargs)
 
 	def __str__(self):
 		return f"{self.site}: {self.name}"

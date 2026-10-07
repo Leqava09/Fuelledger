@@ -2,55 +2,60 @@
 {% load static %}
 {% block title %}{{ site.name }} | FuelLedger{% endblock %}
 {% block content %}
-<div class="page-heading">
-    <div><div class="eyebrow">SITE</div><h1>{{ site.name }}</h1><p class="subheading">Site setup</p></div>
-    <div class="heading-actions">
+<div class="site-dashboard-page{% if site.image %} has-site-picture{% endif %}"{% if site.image %} style="--site-photo: url('{{ site.image.url }}')"{% endif %}>
+<header class="site-dashboard-heading">
+    <div class="eyebrow">SITE</div>
+    <h1>{{ site.name }}</h1>
+    {% if site.manager_name %}<p class="subheading">Manager: {{ site.manager_name }}</p>{% endif %}
+    <div class="site-dashboard-details">
+        {% if site.address %}<span>{{ site.address|linebreaksbr }}</span>{% endif %}
+        {% if site.contact_number %}<span>{{ site.contact_number }}</span>{% endif %}
+        {% if site.contact_email %}<span>{{ site.contact_email }}</span>{% endif %}
+    </div>
+    <div class="site-dashboard-actions">
         <a class="button secondary" href="{% url 'site-history' site.slug %}">History</a>
         {% if can_manage_users %}<a class="button secondary" href="{% url 'site-users' site.slug %}">Users and groups</a>{% endif %}
     </div>
-</div>
-<div class="metric-strip">
-    <div class="metric"><span>Tanks</span><strong>{{ tank_count }}</strong><small>configured at this site</small></div>
-    <div class="metric"><span>EFT/Driveway</span><strong>{{ speed_point_count }}</strong><small>configured at this site</small></div>
-    <div class="metric"><span>Manual/Shop</span><strong>{{ manual_shop_count }}</strong><small>configured at this site</small></div>
-</div>
-<section class="date-workspace">
+</header>
+<section class="date-workspace" data-cash-up-draft-key="{{ request.user.pk }}:{{ site.pk }}:{{ selected_date|date:'Y-m-d' }}:{{ selected_shift }}">
     <form id="business-date-form" class="business-date-form" method="get">
         <div class="date-control">
             <label for="business-date">Business date</label>
             <input id="business-date" name="date" type="date" value="{{ selected_date|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}" required>
+        </div>
+        <div class="date-control shift-control">
+            <label for="site-shift">Shift</label>
+            <select id="site-shift" name="shift">
+                <option value="">Select shift</option>
+                {% for shift_name in shift_names %}<option value="{{ shift_name }}" {% if selected_shift == shift_name %}selected{% endif %}>{{ shift_name }}</option>{% endfor %}
+            </select>
         </div>
     </form>
     <div class="form-launcher">
         {% if selected_shift %}
         <div class="section-heading">
             <h2>{{ selected_shift }} shift forms for {{ selected_date|date:"d M Y" }}</h2>
-            <a class="table-link" href="?date={{ selected_date|date:'Y-m-d' }}">Change shift</a>
         </div>
         <div class="form-launcher-buttons">
             {% for form_key, form_label in site_forms.items %}
             <a class="button primary" href="{% url 'blank-site-form' site.slug form_key %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ selected_shift|urlencode }}">{{ form_label }} <span aria-hidden="true">→</span></a>
             {% endfor %}
         </div>
+        {% if cash_up_tabs %}
+        <section class="fuel-reading-section" aria-labelledby="cash-up-heading">
+            <div class="section-heading"><h2 id="cash-up-heading">Cash Up</h2></div>
+            {% include "ledger/cash_up_tabs.html" with active_cash_up_section="cash" %}
+        </section>
+        {% endif %}
         <section class="fuel-reading-section" aria-labelledby="fuel-reading-heading">
             <div class="section-heading"><h2 id="fuel-reading-heading">Fuel Readings</h2></div>
             {% include "ledger/fuel_reading_tabs.html" %}
         </section>
         {% else %}
-        <div class="section-heading"><h2>Select a shift for {{ selected_date|date:"d M Y" }}</h2></div>
-        <form class="selection-form" method="get">
-            <input type="hidden" name="date" value="{{ selected_date|date:'Y-m-d' }}">
-            <div class="form-row">
-                <label for="site-shift">Shift</label>
-                <select id="site-shift" name="shift" required>
-                    <option value="">Select shift</option>
-                    {% for shift_name in shift_names %}<option value="{{ shift_name }}">{{ shift_name }}</option>{% endfor %}
-                </select>
-            </div>
-            <div class="form-actions"><button class="button primary" type="submit">Continue</button></div>
-        </form>
+        <div class="section-heading"><h2>Select a shift above to display its forms</h2></div>
         {% endif %}
     </div>
 </section>
+</div>
 {% endblock %}
-{% block extra_js %}<script src="{% static 'js/site_date_picker.js' %}" defer></script>{% endblock %}
+{% block extra_js %}<script src="{% static 'js/site_date_picker.js' %}" defer></script><script src="{% static 'js/cash_up.js' %}" defer></script>{% endblock %}

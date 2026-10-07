@@ -1,30 +1,41 @@
 {% extends "base.html" %}
-{% block title %}HQ overview | FuelLedger{% endblock %}
+{% block title %}Head office | FuelLedger{% endblock %}
 {% block content %}
-<div class="page-heading">
-    <div><div class="eyebrow">HEAD OFFICE</div><h1>Cash-up overview</h1></div>
-    {% if request.user.is_staff %}<a class="button secondary" href="{% url 'admin:index' %}">Manage users and sites <span aria-hidden="true">↗</span></a>{% endif %}
-</div>
-<section class="section-block">
-    <div class="section-heading"><h2>Sites</h2><span>{{ sites|length }} active</span></div>
+<header class="hq-dashboard-heading">
+    <div class="eyebrow">FUELLEDGER / HEAD OFFICE</div>
+    <h1>FuelLedger HQ</h1>
+    <p class="subheading">Sites and access</p>
+</header>
+{% if request.is_hq_user %}
+<nav class="hq-admin-links" aria-label="Head office administration">
+    <a class="button secondary" href="{% url 'admin:auth_user_changelist' %}">Users</a>
+    <a class="button secondary" href="{% url 'admin:auth_group_changelist' %}">Groups</a>
+    <a class="button secondary" href="{% url 'admin:ledger_site_changelist' %}">Site administration</a>
+</nav>
+{% endif %}
+<section class="hq-sites-section" aria-labelledby="hq-sites-heading">
+    <div class="hq-sites-heading">
+        <h2 id="hq-sites-heading">Sites</h2>
+        <span>{{ sites|length }} active</span>
+    </div>
     {% if sites %}
-    <div class="site-grid">
+    <div class="hq-site-list">
         {% for site in sites %}
-        <a class="site-row" href="{% url 'site-dashboard' site.slug %}">
-            <span class="site-initial">{{ site.name|first|upper }}</span>
-            <span class="site-copy"><strong>{{ site.name }}</strong><small>{% if site.currency %}{{ site.currency }} · {% endif %}Open site ledger</small></span>
-            <span class="row-arrow" aria-hidden="true">→</span>
-        </a>
+        <article class="hq-site-card">
+            <a class="hq-site-picture{% if not site.image %} hq-site-picture--empty{% endif %}" href="{% url 'site-dashboard' site.slug %}"{% if site.image %} style="background-image: linear-gradient(rgba(12, 81, 77, .28), rgba(12, 81, 77, .28)), url('{{ site.image.url }}')"{% endif %} aria-label="Open {{ site.name }}">
+                <span class="hq-site-picture-title">{{ site.name }}</span>
+            </a>
+            <div class="hq-site-card-content">
+                {% if site.manager_name %}<p>{{ site.manager_name }}</p>{% endif %}
+                {% if site.address %}<p class="hq-site-address">{{ site.address|linebreaksbr }}</p>{% endif %}
+                <div class="hq-site-actions">
+                    <a class="button primary" href="{% url 'site-dashboard' site.slug %}">Open site</a>
+                    <a class="button secondary" href="{% url 'admin:ledger_site_change' site.pk %}">Edit</a>
+                </div>
+            </div>
+        </article>
         {% endfor %}
     </div>
-    {% else %}<p class="empty-state">Add the first site in user and site administration.</p>{% endif %}
-</section>
-<section class="section-block">
-    <div class="section-heading"><h2>Latest submissions</h2></div>
-    {% if recent_entries %}
-    <div class="table-wrap"><table><thead><tr><th>Site</th><th>Business date</th><th>Shift</th><th>Entered by</th><th></th></tr></thead><tbody>
-        {% for entry in recent_entries %}<tr><td>{{ entry.site.name }}</td><td>{{ entry.business_date|date:"d M Y" }}</td><td>{{ entry.shift_label }}</td><td>{{ entry.created_by.get_full_name|default:entry.created_by.username }}</td><td><a class="table-link" href="{% url 'entry-detail' entry.site.slug entry.pk %}">View</a></td></tr>{% endfor %}
-    </tbody></table></div>
-    {% else %}<p class="empty-state">No shift records have been submitted.</p>{% endif %}
+    {% else %}<p class="empty-state">No active sites are registered.</p>{% endif %}
 </section>
 {% endblock %}

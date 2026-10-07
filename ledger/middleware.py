@@ -28,6 +28,23 @@ class SiteAccessMiddleware:
                 return HttpResponseForbidden("HQ access is restricted to HQ users.")
             request.is_hq_context = True
 
+        if path.startswith("/site-admin/"):
+            if not request.user.is_authenticated:
+                return self.get_response(request)
+            from .models import Site
+
+            site_id = request.session.get("site_admin_site_id")
+            site = Site.objects.filter(pk=site_id, is_active=True).first()
+            profile = self._profile(request.user)
+            if not site or (not request.user.is_superuser and not (
+                profile and (
+                    profile.role == "HQ"
+                    or (profile.role == "SITE" and profile.site_id == site.id and profile.can_manage_users)
+                )
+            )):
+                return HttpResponseForbidden("Select a site where you are allowed to manage users and groups.")
+            request.current_site = site
+
         match = re.match(r"^/sites/([\w-]+)(?:/|$)", path)
         if match:
             if not request.user.is_authenticated:

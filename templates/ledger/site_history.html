@@ -13,8 +13,20 @@
 	</div>
 	{% if form_url %}<a class="button secondary" href="{{ form_url }}">Back to form</a>{% endif %}
 </div>
-{% if events %}<div class="table-wrap"><table><thead><tr><th>Date/time</th><th>User</th><th>Area</th><th>Record</th><th>Action</th><th>Details</th></tr></thead><tbody>
-{% for event in events %}<tr><td>{{ event.created_at|date:"d M Y H:i:s" }}</td><td>{{ event.actor.get_full_name|default:event.actor.username|default:"System" }}</td><td>{{ event.category }}</td><td>{{ event.object_label }}</td><td>{{ event.action|title }}</td><td><details><summary>Changes</summary><pre>Before: {{ event.before|pprint }}
-After: {{ event.after|pprint }}</pre></details></td></tr>{% endfor %}
-</tbody></table></div>{% else %}<p class="empty-state">{% if form_label %}No history has been recorded for this form yet.{% else %}No activity has been recorded for this site yet.{% endif %}</p>{% endif %}
+{% if events %}
+<div class="history-table-wrap">
+	<table class="history-table">
+		<thead><tr><th>Date/time</th><th>User</th><th>Action</th></tr></thead>
+		<tbody>
+			{% for row in history_rows %}
+			<tr>
+				<td>{{ row.event.created_at|date:"F j, Y, g:i a" }}</td>
+				<td>{{ row.event.actor.get_full_name|default:row.event.actor.username|default:"System" }}</td>
+				<td class="history-action"><strong>{{ row.event.category }}</strong>{% if row.event.object_label %} / {{ row.event.object_label }}{% endif %}: {{ row.description }}</td>
+			</tr>
+			{% endfor %}
+		</tbody>
+	</table>
+</div>
+{% else %}<p class="empty-state">{% if form_label %}No history has been recorded for this form yet.{% else %}No activity has been recorded for this site yet.{% endif %}</p>{% endif %}
 {% endblock %}
