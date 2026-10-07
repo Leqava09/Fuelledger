@@ -168,6 +168,33 @@ class FuelBooking(models.Model):
 		return f"{self.site} / {self.business_date} / {self.shift_label} / Delivery {self.delivery_number} / {self.tank}"
 
 
+class FuelTransfer(models.Model):
+	site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="fuel_transfers")
+	from_tank = models.ForeignKey(Tank, on_delete=models.PROTECT, related_name="fuel_transfers_from")
+	to_tank = models.ForeignKey(Tank, on_delete=models.PROTECT, related_name="fuel_transfers_to")
+	business_date = models.DateField()
+	shift_label = models.CharField(max_length=30)
+	amount_litres = models.DecimalField(max_digits=11, decimal_places=2, verbose_name="Amount (L)")
+	created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="fuel_transfers_created")
+	created_at = models.DateTimeField(auto_now_add=True)
+
+	class Meta:
+		ordering = ["-business_date", "shift_label", "created_at"]
+
+	def clean(self):
+		if self.site_id and self.shift_label not in self.site.get_shift_names():
+			raise ValidationError({"shift_label": "Select a shift configured for this site."})
+		if self.site_id and self.from_tank_id and self.from_tank.site_id != self.site_id:
+			raise ValidationError({"from_tank": "The selected tank must belong to this site."})
+		if self.site_id and self.to_tank_id and self.to_tank.site_id != self.site_id:
+			raise ValidationError({"to_tank": "The selected tank must belong to this site."})
+		if self.from_tank_id and self.to_tank_id and self.from_tank_id == self.to_tank_id:
+			raise ValidationError({"to_tank": "Choose a different destination tank."})
+
+	def __str__(self):
+		return f"{self.site} / {self.business_date} / {self.shift_label} / {self.from_tank} to {self.to_tank} / {self.amount_litres} L"
+
+
 class UserProfile(models.Model):
 	class Role(models.TextChoices):
 		HQ = "HQ", "HQ"

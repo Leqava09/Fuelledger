@@ -136,7 +136,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .status-pill, .version-tag { padding: 6px 10px; border-radius: 3px; color: var(--teal-dark); background: var(--mint); font-size: 11px; font-weight: 750; }
 .version-tag { color: var(--muted); background: #e9eeeb; }
 .entry-form { width: min(850px, 100%); }
-.cash-up-page-heading { width: min(900px, 100%); margin-right: auto; margin-left: auto; justify-content: flex-start; gap: 72px; }
+.cash-up-page-heading, .fuel-workflow-page-heading { width: min(900px, 100%); margin-right: auto; margin-left: auto; justify-content: flex-start; gap: 72px; }
 .cash-up-form { margin: 0 auto; }
 .form-section { margin-bottom: 12px; padding: 20px 22px 22px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
 .form-section-title { display: flex; align-items: center; gap: 11px; margin-bottom: 17px; }

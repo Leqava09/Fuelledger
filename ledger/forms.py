@@ -1,11 +1,13 @@
+import hashlib
 import re
+from decimal import Decimal
 
 from django import forms
 from django.contrib.admin.widgets import FilteredSelectMultiple
 from django.contrib.auth.models import User
 from django.utils import timezone
 
-from .models import CashUpAdditional, FuelBooking, ManualShopPoint, SITE_FORM_PERMISSION_CHOICES, SiteGroup, SpeedPoint
+from .models import CashUpAdditional, FuelBooking, ManualShopPoint, SITE_FORM_PERMISSION_CHOICES, SiteGroup, SpeedPoint, Tank
 
 
 def _natural_name_key(value):
@@ -75,6 +77,48 @@ class BookInFuelForm(forms.Form):
 		return business_date
 
 
+class FuelTransferForm(forms.Form):
+	business_date = forms.DateField(widget=forms.HiddenInput)
+	shift_label = forms.CharField(widget=forms.HiddenInput)
+	from_tank = forms.ModelChoiceField(queryset=Tank.objects.none(), label="From tank")
+	to_tank = forms.ModelChoiceField(queryset=Tank.objects.none(), label="To tank")
+	amount_litres = forms.DecimalField(
+		label="Amount (L)",
+		min_value=0.01,
+		max_value=100000000,
+		max_digits=11,
+		decimal_places=2,
+		widget=forms.NumberInput(attrs={"min": "0.01", "max": "100000000", "step": "0.01"}),
+	)
+
+	def __init__(self, site, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+		self.site = site
+		tanks = Tank.objects.filter(site=site).order_by("name")
+		self.fields["from_tank"].queryset = tanks
+		self.fields["to_tank"].queryset = tanks
+
+	def clean_business_date(self):
+		business_date = self.cleaned_data["business_date"]
+		if business_date > timezone.localdate():
+			raise forms.ValidationError("Transfer dates cannot be in the future.")
+		return business_date
+
+	def clean_shift_label(self):
+		shift_label = self.cleaned_data["shift_label"]
+		if shift_label not in self.site.get_shift_names():
+			raise forms.ValidationError("Select a shift configured for this site.")
+		return shift_label
+
+	def clean(self):
+		cleaned_data = super().clean()
+		from_tank = cleaned_data.get("from_tank")
+		to_tank = cleaned_data.get("to_tank")
+		if from_tank and to_tank and from_tank.pk == to_tank.pk:
+			self.add_error("to_tank", "Choose a different destination tank.")
+		return cleaned_data
+
+
 class ShiftSelectionForm(forms.Form):
 	business_date = forms.DateField(widget=forms.HiddenInput)
 	shift_label = forms.ChoiceField(label="Shift")
@@ -135,8 +179,24 @@ class CashUpEntryForm(forms.Form):
 			self._add_money_field("airtime_balance", "Airtime Balance", initial_values)
 			self._add_money_field("airtime_loaded", "Airtime Loaded", initial_values, total_group="airtime-loaded")
 		elif section == "sales-account":
-			self._add_repeating_money_fields("sales_account", "Sales Account", "sales_account", "sales_account_count", initial_values)
+			self._add_repeating_money_fields("sales_account", "Account", "sales_account", "sales_account_count", initial_values)
 			self._add_repeating_money_fields("arrears_account", "Arrears Account", "arrears_account", "arrears_account_count", initial_values)
+		elif section == "fuel":
+			product_groups = {}
+			for tank in Tank.objects.filter(site=site).order_by("name"):
+				product = " ".join(tank.product.split())
+				normalized_product = product.casefold()
+				product_groups.setdefault(normalized_product, {"label": product, "tanks": []})["tanks"].append(tank)
+			for normalized_product, product_group in product_groups.items():
+				key_hash = hashlib.sha256(normalized_product.encode("utf-8")).hexdigest()[:16]
+				key = f"fuel_product_{key_hash}"
+				initial_value = initial_values.get(key)
+				if initial_value is None:
+					initial_value = sum((
+						Decimal(str(initial_values.get(f"fuel_{tank.pk}") or 0))
+						for tank in product_group["tanks"]
+					), Decimal("0"))
+				self._add_money_field(key, product_group["label"], {key: initial_value}, total_group="fuel")
 		elif section == "payouts":
 			self._add_repeating_money_fields("payouts", "Payout", "payout", "payout_count", initial_values, "payout")
 		elif section == "eft-driveway":

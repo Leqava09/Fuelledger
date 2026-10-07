@@ -14,6 +14,7 @@ from django.contrib.auth.models import User
 from .forms import (
 	BookInFuelForm,
 	CashUpEntryForm,
+	FuelTransferForm,
 	ElectronicReadingForm,
 	MechanicalReadingForm,
 	SiteGroupForm,
@@ -25,6 +26,7 @@ from .models import (
 	CashUpShiftRecord,
 	DailyFuelReading,
 	FuelBooking,
+	FuelTransfer,
 	NozzleFuelReading,
 	ShiftEntry,
 	Site,
@@ -38,6 +40,7 @@ from .models import SITE_FORM_PERMISSION_CHOICES
 
 SITE_FORM_LABELS = {
 	"book-in-fuel": "Book IN Fuel",
+	"transfer-fuel": "Transfer Fuel",
 	"daily-fuel-readings": "Fuel Readings",
 	"cash-up": "Cash Up",
 }
@@ -50,7 +53,8 @@ CASH_UP_TAB_LABELS = (
 	("cash", "Cash"),
 	("vouchers", "Vouchers"),
 	("airtime", "Airtime"),
-	("sales-account", "Sales Account"),
+	("sales-account", "Account"),
+	("fuel", "Fuel"),
 	("payouts", "Payouts"),
 	("eft-driveway", "EFT/Driveway"),
 	("manual-shop", "Manual/Shop"),
@@ -101,10 +105,30 @@ def _site_form_permissions(user, site):
 
 
 def _can_access_site_form(user, site, form_key):
+	if form_key == "transfer-fuel":
+		form_key = "book-in-fuel"
 	permissions = _site_form_permissions(user, site)
 	if form_key == "daily-fuel-readings":
 		return any(key in permissions for key in FUEL_READING_FORM_LABELS)
 	return form_key in permissions
+
+
+def _fuel_workflow_redirect(request, site, selected_date, shift_label, form_key, label, save_mode, next_form=None):
+	messages.success(request, f"{label} saved.")
+	date_query = f"date={selected_date.isoformat()}&shift={shift_label}"
+	if save_mode == "exit" or (save_mode == "continue" and next_form is None):
+		return redirect(f"{reverse('site-dashboard', args=[site.slug])}?{date_query}")
+	if save_mode == "continue":
+		if next_form in FUEL_READING_FORM_LABELS:
+			destination = reverse("fuel-reading-entry", args=[site.slug, next_form])
+		else:
+			destination = reverse("blank-site-form", args=[site.slug, next_form])
+		return redirect(f"{destination}?{date_query}")
+	if form_key in FUEL_READING_FORM_LABELS:
+		destination = reverse("fuel-reading-entry", args=[site.slug, form_key])
+	else:
+		destination = reverse("blank-site-form", args=[site.slug, form_key])
+	return redirect(f"{destination}?{date_query}")
 
 
 def _record_audit(site, actor, category, object_label, action, before=None, after=None):
@@ -159,7 +183,8 @@ def site_dashboard(request, slug):
 		"site_forms": {
 			key: label
 			for key, label in SITE_FORM_LABELS.items()
-			if key not in {"daily-fuel-readings", "cash-up"} and key in permissions
+			if key not in {"daily-fuel-readings", "cash-up"}
+			and (key in permissions or (key == "transfer-fuel" and "book-in-fuel" in permissions))
 		},
 		"fuel_reading_forms": [
 			{"key": key, "label": label}
@@ -189,6 +214,8 @@ def blank_site_form(request, slug, form_key):
 		return redirect(f"{reverse('site-dashboard', args=[site.slug])}?date={selected_date.isoformat()}")
 	if form_key == "book-in-fuel":
 		return _book_in_fuel(request, label, selected_date, today, shift_label)
+	if form_key == "transfer-fuel":
+		return _transfer_fuel(request, selected_date, shift_label)
 	if form_key == "daily-fuel-readings":
 		return redirect(f"{reverse('site-dashboard', args=[site.slug])}?date={selected_date.isoformat()}&shift={shift_label}")
 	if form_key == "cash-up":
@@ -199,6 +226,60 @@ def blank_site_form(request, slug, form_key):
 		"form_label": label,
 		"selected_date": selected_date,
 		"shift_label": shift_label,
+	})
+
+
+def _transfer_fuel(request, selected_date, shift_label):
+	site = request.current_site
+	form = FuelTransferForm(
+		site,
+		data=request.POST if request.method == "POST" else None,
+		initial={"business_date": selected_date, "shift_label": shift_label},
+	)
+	if request.method == "POST" and form.is_valid():
+		save_mode = request.POST.get("save_mode", "tab")
+		transfer = FuelTransfer.objects.create(
+			site=site,
+			from_tank=form.cleaned_data["from_tank"],
+			to_tank=form.cleaned_data["to_tank"],
+			business_date=form.cleaned_data["business_date"],
+			shift_label=form.cleaned_data["shift_label"],
+			amount_litres=form.cleaned_data["amount_litres"],
+			created_by=request.user,
+		)
+		_record_audit(
+			site,
+			request.user,
+			"Transfer Fuel",
+			f"{selected_date.isoformat()} / {shift_label}",
+			"created",
+			after={
+				"from_tank": str(transfer.from_tank),
+				"to_tank": str(transfer.to_tank),
+				"amount_litres": str(transfer.amount_litres),
+			},
+		)
+		return _fuel_workflow_redirect(
+			request,
+			site,
+			selected_date,
+			shift_label,
+			"transfer-fuel",
+			"Fuel transfer",
+			save_mode,
+		)
+	transfers = FuelTransfer.objects.filter(
+		site=site,
+		business_date=selected_date,
+		shift_label=shift_label,
+	).select_related("from_tank", "to_tank", "created_by")
+	return render(request, "ledger/transfer_fuel.html", {
+		"site": site,
+		"form": form,
+		"selected_date": selected_date,
+		"shift_label": shift_label,
+		"has_tanks": site.tanks.exists(),
+		"transfers": transfers,
 	})
 
 
@@ -235,6 +316,7 @@ def _book_in_fuel(request, label, selected_date, today, shift_label):
 		visible_delivery_count = initial_delivery_count
 	visible_delivery_count = min(max(visible_delivery_count, 1), FuelBooking.MAX_DELIVERIES_PER_SHIFT)
 	if request.method == "POST" and form.is_valid():
+		save_mode = request.POST.get("save_mode", "tab")
 		before = [
 			{
 				"delivery": booking.delivery_number,
@@ -283,10 +365,15 @@ def _book_in_fuel(request, label, selected_date, today, shift_label):
 				for delivery_number, truck_reference, tank, quantity in saved_deliveries
 			]},
 		)
-		messages.success(request, "Fuel delivery quantities saved.")
-		return redirect(
-			f"{reverse('blank-site-form', args=[site.slug, 'book-in-fuel'])}"
-			f"?date={form.cleaned_data['business_date'].isoformat()}&shift={shift_label}"
+		return _fuel_workflow_redirect(
+			request,
+			site,
+			form.cleaned_data["business_date"],
+			shift_label,
+			"book-in-fuel",
+			"Fuel delivery quantities",
+			save_mode,
+			"transfer-fuel",
 		)
 	delivery_rows = [
 		(
@@ -387,6 +474,7 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 		"vouchers": totals["vouchers"],
 		"sales_account": totals["sales_account"],
 		"arrears_account": totals["arrears_account"],
+		"fuel": totals["fuel"],
 		"payouts": totals["payouts"],
 		"eft-driveway": totals["eft_driveway"],
 		"manual-shop": totals["manual_shop"],
@@ -416,7 +504,7 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 		"sales_combined_total": totals["sales_accounts_combined"],
 		"repeat_groups": repeat_groups,
 		"airtime_difference": airtime_difference,
-		"show_total": section in {"cash", "vouchers", "sales-account", "payouts", *total_group_prefixes},
+		"show_total": section in {"cash", "vouchers", "sales-account", "fuel", "payouts", *total_group_prefixes},
 		"total_group": section,
 		"field_rows": [(label, form[key]) for key, label in form.entry_fields],
 		"draft_key": f"{request.user.pk}:{site.pk}:{selected_date.isoformat()}:{shift_label}",
@@ -425,6 +513,10 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 
 def _apply_cash_up_form_values(values, form):
 	updated_values = dict(values)
+	if form.section == "fuel":
+		for saved_key in list(updated_values):
+			if saved_key.startswith("fuel_"):
+				updated_values.pop(saved_key, None)
 	for key, _ in form.entry_fields:
 		value = form.cleaned_data[key]
 		if value in (None, ""):
@@ -515,12 +607,24 @@ def _cash_up_totals(values):
 		"sales_account": str(sales_account),
 		"arrears_account": str(arrears_account),
 		"sales_accounts_combined": str(sales_account + arrears_account),
+		"fuel": str(_fuel_total(values, sum_group)),
 		"payouts": str(sum_group("payout_", "payout")),
 		"airtime_loaded": str(Decimal(str(values.get("airtime_loaded") or 0))),
 		"eft_driveway": str(sum(Decimal(str(value or 0)) for key, value in values.items() if key.startswith("eft_"))),
 		"manual_shop": str(sum(Decimal(str(value or 0)) for key, value in values.items() if key.startswith("manual_"))),
 		"cash_up_additional": str(sum(Decimal(str(value or 0)) for key, value in values.items() if key.startswith("additional_"))),
 	}
+
+
+def _fuel_total(values, legacy_sum_group):
+	product_values = [
+		Decimal(str(value or 0))
+		for key, value in values.items()
+		if key.startswith("fuel_product_")
+	]
+	if product_values:
+		return sum(product_values, Decimal("0"))
+	return legacy_sum_group("fuel_")
 
 
 def section_label_for(section):
@@ -665,10 +769,20 @@ def fuel_reading_entry(request, slug, reading_type):
 				before=before,
 				after=after,
 			)
-			messages.success(request, f"{form_label} saved.")
-			return redirect(
-				f"{reverse('fuel-reading-entry', args=[site.slug, reading_type])}"
-				f"?date={selected_date.isoformat()}&shift={shift_label}"
+			next_reading_type = {
+				"tank-reading": "mechanical-readings",
+				"mechanical-readings": "electronic-readings",
+				"electronic-readings": None,
+			}[reading_type]
+			return _fuel_workflow_redirect(
+				request,
+				site,
+				form.cleaned_data["business_date"],
+				form.cleaned_data["shift_label"],
+				reading_type,
+				form_label,
+				request.POST.get("save_mode", "tab"),
+				next_reading_type,
 			)
 	if reading_type == "tank-reading":
 		field_rows = [
