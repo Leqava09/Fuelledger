@@ -160,7 +160,7 @@ class CashUpEntryForm(forms.Form):
 	business_date = forms.DateField(widget=forms.HiddenInput)
 	shift_label = forms.CharField(widget=forms.HiddenInput)
 
-	def __init__(self, site, section, *args, initial_values=None, **kwargs):
+	def __init__(self, site, section, *args, initial_values=None, previous_airtime_balance=None, **kwargs):
 		super().__init__(*args, **kwargs)
 		self.site = site
 		self.section = section
@@ -174,39 +174,23 @@ class CashUpEntryForm(forms.Form):
 			self._add_repeating_money_fields("vouchers", "Voucher", "voucher", "voucher_count", initial_values, "vouchers")
 		elif section == "airtime":
 			self._add_text_field("airtime_shift_nr", "Airtime Shift Number", initial_values, max_length=10)
-			self._add_money_field("airtime_slip", "Airtime Slip", initial_values)
-			self._add_money_field("airtime_system", "Airtime System", initial_values)
-			self._add_money_field("airtime_balance", "Airtime Balance", initial_values)
-			self._add_money_field("airtime_loaded", "Airtime Loaded", initial_values, total_group="airtime-loaded")
+			self._add_repeating_airtime_fields(initial_values, previous_airtime_balance)
 		elif section == "sales-account":
 			self._add_repeating_money_fields("sales_account", "Account", "sales_account", "sales_account_count", initial_values)
 			self._add_repeating_money_fields("arrears_account", "Arrears Account", "arrears_account", "arrears_account_count", initial_values)
 		elif section == "fuel":
-			product_groups = {}
-			for tank in Tank.objects.filter(site=site).order_by("name"):
-				product = " ".join(tank.product.split())
-				normalized_product = product.casefold()
-				product_groups.setdefault(normalized_product, {"label": product, "tanks": []})["tanks"].append(tank)
-			for normalized_product, product_group in product_groups.items():
-				key_hash = hashlib.sha256(normalized_product.encode("utf-8")).hexdigest()[:16]
-				key = f"fuel_product_{key_hash}"
-				initial_value = initial_values.get(key)
-				if initial_value is None:
-					initial_value = sum((
-						Decimal(str(initial_values.get(f"fuel_{tank.pk}") or 0))
-						for tank in product_group["tanks"]
-					), Decimal("0"))
-				self._add_money_field(key, product_group["label"], {key: initial_value}, total_group="fuel")
+			self._add_money_field("forecourt_total", "Total amount Forecourt", initial_values, total_group="fuel")
+			self._add_money_field("shop_total", "Total amount Shop", initial_values, total_group="fuel")
 		elif section == "payouts":
 			self._add_repeating_money_fields("payouts", "Payout", "payout", "payout_count", initial_values, "payout")
 		elif section == "eft-driveway":
 			for point in SpeedPoint.objects.filter(site=site):
 				key = f"eft_{point.pk}"
-				self._add_money_field(key, f"EFT/Driveway {point.serial_number}", initial_values)
+				self._add_money_field(key, f"EFT {point.serial_number}", initial_values)
 		elif section == "manual-shop":
 			for point in ManualShopPoint.objects.filter(site=site):
 				key = f"manual_{point.pk}"
-				self._add_money_field(key, f"Manual/Shop {point.serial_number}", initial_values)
+				self._add_money_field(key, f"Manual {point.serial_number}", initial_values)
 		elif section == "cash-up-additional":
 			for additional in CashUpAdditional.objects.filter(site=site):
 				key = f"additional_{additional.pk}"
@@ -267,6 +251,63 @@ class CashUpEntryForm(forms.Form):
 			"rows": [(row_label, self[key]) for row_label, key in rows],
 			"count": row_count,
 		})
+
+	def _add_repeating_airtime_fields(self, initial_values, previous_airtime_balance=None):
+		indexes = []
+		for key in initial_values:
+			for field_name in ("airtime_slip", "airtime_system", "airtime_loaded", "airtime_balance"):
+				prefix = f"{field_name}_"
+				if key.startswith(prefix) and key[len(prefix):].isdigit():
+					indexes.append(int(key[len(prefix):]))
+					break
+		default_count = max(indexes + [1], default=1)
+		if self.is_bound:
+			try:
+				row_count = int(self.data.get("airtime_count", default_count) or default_count)
+			except (TypeError, ValueError):
+				row_count = default_count
+			row_count = min(max(row_count, 1), self.MAX_REPEAT_ROWS)
+		else:
+			row_count = min(max(default_count, 1), self.MAX_REPEAT_ROWS)
+		self.fields["airtime_count"] = forms.IntegerField(
+			required=False,
+			min_value=1,
+			max_value=self.MAX_REPEAT_ROWS,
+			initial=row_count,
+			widget=forms.HiddenInput(attrs={"data-repeat-count": "airtime"}),
+		)
+		for index in range(1, row_count + 1):
+			for field_name, label in (
+				("airtime_slip", "Airtime Slip"),
+				("airtime_system", "Airtime System"),
+				("airtime_loaded", "Airtime Loaded"),
+				("airtime_balance", "Airtime Balance"),
+			):
+				key = f"{field_name}_{index}"
+				initial = initial_values.get(key)
+				if index == 1 and initial is None:
+					initial = initial_values.get(field_name)
+				self.fields[key] = forms.DecimalField(
+					label=f"{label} {index}" if row_count > 1 else label,
+					required=False,
+					min_value=0,
+					max_value=100000000,
+					max_digits=11,
+					decimal_places=2,
+					initial=initial,
+					widget=forms.NumberInput(attrs={"min": "0", "max": "100000000", "step": "0.01", "data-cash-up-total-input": "airtime"}),
+				)
+				self.entry_fields.append((key, self.fields[key].label))
+				if field_name == "airtime_balance" and previous_airtime_balance is not None:
+					self.fields[key].widget.attrs["readonly"] = "readonly"
+					self.fields[key].widget.attrs["aria-readonly"] = "true"
+					self.fields[key].widget.attrs["class"] = "airtime-balance-readonly"
+					self.fields[key].widget.attrs["style"] = "background-color: #dff7e1;"
+				if index == 1:
+					legacy_key = field_name
+					if legacy_key not in self.fields:
+						self.fields[legacy_key] = self.fields[key]
+						self.entry_fields.append((legacy_key, self.fields[key].label))
 
 	def _add_text_field(self, key, label, initial_values, max_length=60):
 		self.fields[key] = forms.CharField(

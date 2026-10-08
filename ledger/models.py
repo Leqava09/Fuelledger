@@ -101,8 +101,8 @@ class Nozzle(models.Model):
 
 class SpeedPoint(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="speed_points")
-	point_id = models.CharField(max_length=10, verbose_name="EFT/Driveway no/ID")
-	serial_number = models.CharField(max_length=30, verbose_name="EFT/Driveway Serial No")
+	point_id = models.CharField(max_length=10, verbose_name="EFT no/ID")
+	serial_number = models.CharField(max_length=30, verbose_name="EFT Serial No")
 
 	class Meta:
 		ordering = ["point_id"]
@@ -117,8 +117,8 @@ class SpeedPoint(models.Model):
 
 class ManualShopPoint(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="manual_shop_points")
-	point_id = models.CharField(max_length=10, verbose_name="Manual/Shop no/ID")
-	serial_number = models.CharField(max_length=30, verbose_name="Manual/Shop Serial No")
+	point_id = models.CharField(max_length=10, verbose_name="Manual no/ID")
+	serial_number = models.CharField(max_length=30, verbose_name="Manual Serial No")
 
 	class Meta:
 		ordering = ["point_id"]

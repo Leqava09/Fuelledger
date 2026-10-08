@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.contrib.auth.decorators import login_required
@@ -50,15 +50,15 @@ FUEL_READING_FORM_LABELS = {
 	"electronic-readings": "Electronic Readings",
 }
 CASH_UP_TAB_LABELS = (
+	("fuel", "Total Sales"),
 	("cash", "Cash"),
 	("vouchers", "Vouchers"),
-	("airtime", "Airtime"),
 	("sales-account", "Account"),
-	("fuel", "Fuel"),
 	("payouts", "Payouts"),
-	("eft-driveway", "EFT/Driveway"),
-	("manual-shop", "Manual/Shop"),
+	("eft-driveway", "EFT"),
+	("manual-shop", "Manual"),
 	("cash-up-additional", "Additional"),
+	("airtime", "Airtime"),
 )
 
 
@@ -415,12 +415,22 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 	site = request.current_site
 	record = CashUpShiftRecord.objects.filter(site=site, business_date=selected_date, shift_label=shift_label).first()
 	initial_values = record.values if record else {}
+	previous_airtime_balance = _previous_airtime_balance(site, selected_date, shift_label)
+	if section == "airtime" and previous_airtime_balance is not None:
+		current_airtime_balance = previous_airtime_balance - Decimal(str(initial_values.get("airtime_slip") or 0)) + Decimal(str(initial_values.get("airtime_loaded") or 0))
+		initial_values = {**initial_values, "airtime_balance": str(current_airtime_balance)}
+	post_data = request.POST.copy() if request.method == "POST" else None
+	if request.method == "POST" and section == "airtime" and previous_airtime_balance is not None:
+		slip_value = Decimal(str(post_data.get("airtime_slip") or 0))
+		loaded_value = Decimal(str(post_data.get("airtime_loaded") or 0))
+		post_data["airtime_balance"] = str(previous_airtime_balance - slip_value + loaded_value)
 	form = CashUpEntryForm(
 		site,
 		section,
-		data=request.POST if request.method == "POST" else None,
+		data=post_data,
 		initial={"business_date": selected_date, "shift_label": shift_label},
 		initial_values=initial_values,
+		previous_airtime_balance=previous_airtime_balance,
 	)
 	if request.method == "POST":
 		save_mode = request.POST.get("save_mode", "tab")
@@ -452,13 +462,13 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 				if not tab_form.is_valid():
 					validation_errors.append(section_label_for(tab_key))
 					continue
-				updated_values = _apply_cash_up_form_values(updated_values, tab_form)
+				updated_values = _apply_cash_up_form_values(updated_values, tab_form, previous_airtime_balance=_previous_airtime_balance(site, selected_date, shift_label))
 			if validation_errors:
 				form.add_error(None, "Check the invalid entries in these sections before saving all: " + ", ".join(validation_errors))
 			else:
 				return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, "exit", section)
 		elif form.is_valid():
-			updated_values = _apply_cash_up_form_values(initial_values, form)
+			updated_values = _apply_cash_up_form_values(initial_values, form, previous_airtime_balance=previous_airtime_balance)
 			return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, save_mode, section)
 	else:
 		save_mode = "tab"
@@ -488,6 +498,17 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 		}
 		for group in form.repeat_groups
 	]
+	airtime_rows = []
+	if section == "airtime":
+		row_count = max(1, int(form.data.get("airtime_count", 1) or 1)) if request.method == "POST" else max(1, len([key for key in initial_values if key.startswith("airtime_slip_") or key.startswith("airtime_system_") or key.startswith("airtime_loaded_") or key.startswith("airtime_balance_")]) // 4 or 1)
+		for index in range(1, row_count + 1):
+			row_fields = []
+			for base, label in (("airtime_slip", "Airtime Slip"), ("airtime_system", "Airtime System"), ("airtime_loaded", "Airtime Loaded"), ("airtime_balance", "Airtime Balance")):
+				field_name = f"{base}_{index}"
+				if field_name in form.fields:
+					row_fields.append((label, form[field_name]))
+			if row_fields:
+				airtime_rows.append(row_fields)
 	return render(request, "ledger/cash_up.html", {
 		"site": site,
 		"form": form,
@@ -503,7 +524,9 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 		"group_totals": group_totals,
 		"sales_combined_total": totals["sales_accounts_combined"],
 		"repeat_groups": repeat_groups,
+		"airtime_rows": airtime_rows,
 		"airtime_difference": airtime_difference,
+		"previous_airtime_balance": previous_airtime_balance,
 		"show_total": section in {"cash", "vouchers", "sales-account", "fuel", "payouts", *total_group_prefixes},
 		"total_group": section,
 		"field_rows": [(label, form[key]) for key, label in form.entry_fields],
@@ -511,13 +534,65 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 	})
 
 
-def _apply_cash_up_form_values(values, form):
+def _apply_cash_up_form_values(values, form, previous_airtime_balance=None):
 	updated_values = dict(values)
 	if form.section == "fuel":
 		for saved_key in list(updated_values):
-			if saved_key.startswith("fuel_"):
+			if saved_key.startswith("fuel_") or saved_key.startswith("fuel_product_"):
 				updated_values.pop(saved_key, None)
+	if form.section == "airtime":
+		for saved_key in list(updated_values):
+			if saved_key.startswith("airtime_") and (saved_key.endswith("_slip") or saved_key.endswith("_system") or saved_key.endswith("_loaded") or saved_key.endswith("_balance") or saved_key.endswith("_count") or saved_key in {"airtime_slip", "airtime_system", "airtime_loaded", "airtime_balance"}):
+				updated_values.pop(saved_key, None)
+		row_count = 1
+		if form.is_bound:
+			try:
+				row_count = int(form.data.get("airtime_count", 1) or 1)
+			except (TypeError, ValueError):
+				row_count = 1
+		else:
+			row_count = max(1, max((int(key.split("_")[-1]) for key in updated_values if key.startswith("airtime_slip_") and key.split("_")[-1].isdigit()), default=1))
+		total_slip = Decimal("0")
+		total_system = Decimal("0")
+		total_loaded = Decimal("0")
+		for index in range(1, row_count + 1):
+			for field_name, total in (("airtime_slip", total_slip), ("airtime_system", total_system), ("airtime_loaded", total_loaded)):
+				key = f"{field_name}_{index}"
+				value = form.cleaned_data.get(key)
+				if value in (None, "") and index == 1:
+					value = form.cleaned_data.get(field_name)
+				if value in (None, ""):
+					value = updated_values.get(key)
+				if value in (None, "") and index == 1:
+					value = updated_values.get(field_name)
+				if value in (None, ""):
+					continue
+				if field_name == "airtime_slip":
+					total_slip += Decimal(str(value))
+				elif field_name == "airtime_system":
+					total_system += Decimal(str(value))
+				else:
+					total_loaded += Decimal(str(value))
+		shift_number = form.cleaned_data.get("airtime_shift_nr")
+		if shift_number not in (None, ""):
+			updated_values["airtime_shift_nr"] = str(shift_number)
+		previous = previous_airtime_balance
+		if previous is None:
+			previous = Decimal(str(updated_values.get("airtime_balance") or 0))
+		if previous is None:
+			previous = Decimal("0")
+		new_balance = previous - total_slip + total_loaded
+		updated_values["airtime_slip"] = str(total_slip)
+		updated_values["airtime_system"] = str(total_system)
+		updated_values["airtime_loaded"] = str(total_loaded)
+		updated_values["airtime_balance"] = str(new_balance)
+		updated_values["airtime_count"] = row_count
+		for index in range(1, row_count + 1):
+			for field_name in ("airtime_slip", "airtime_system", "airtime_loaded", "airtime_balance"):
+				updated_values.pop(f"{field_name}_{index}", None)
 	for key, _ in form.entry_fields:
+		if form.section == "airtime":
+			continue
 		value = form.cleaned_data[key]
 		if value in (None, ""):
 			updated_values.pop(key, None)
@@ -585,6 +660,41 @@ def _complete_cash_up_save(request, site, record, before, updated_values, select
 	)
 
 
+def _latest_airtime_balance(values):
+	if not isinstance(values, dict):
+		return None
+	balance_values = []
+	for key, value in values.items():
+		if key.startswith("airtime_balance_") and key[len("airtime_balance_"):].isdigit():
+			balance_values.append((int(key[len("airtime_balance_"):]), value))
+		elif key == "airtime_balance" and value not in (None, ""):
+			balance_values.append((0, value))
+	if not balance_values:
+		return None
+	return Decimal(str(sorted(balance_values)[-1][1]))
+
+
+def _previous_airtime_balance(site, selected_date, shift_label):
+	shift_names = site.get_shift_names()
+	if shift_label not in shift_names:
+		return None
+	for candidate_shift in [shift_label] + list(reversed(shift_names[:shift_names.index(shift_label)])):
+		candidate = CashUpShiftRecord.objects.filter(site=site, business_date=selected_date, shift_label=candidate_shift).order_by("-updated_at").first()
+		if candidate is not None:
+			value = _latest_airtime_balance(candidate.values)
+			if value is not None:
+				return value
+	for offset in range(1, 366):
+		candidate_date = selected_date - timedelta(days=offset)
+		for candidate_shift in reversed(shift_names):
+			candidate = CashUpShiftRecord.objects.filter(site=site, business_date=candidate_date, shift_label=candidate_shift).order_by("-updated_at").first()
+			if candidate is not None:
+				value = _latest_airtime_balance(candidate.values)
+				if value is not None:
+					return value
+	return None
+
+
 def _cash_up_totals(values):
 	def sum_group(prefix, legacy_key=None):
 		group_values = [
@@ -601,13 +711,19 @@ def _cash_up_totals(values):
 	cash = Decimal(str(values.get("coins") or 0)) + Decimal(str(values.get("safedrops") or 0))
 	sales_account = sum_group("sales_account_", "sales_account")
 	arrears_account = sum_group("arrears_account_", "arrears_account")
+	legacy_fuel_total = _fuel_total(values, sum_group)
+	forecourt_total = Decimal(str(values.get("forecourt_total") or 0))
+	shop_total = Decimal(str(values.get("shop_total") or 0))
+	fuel_total = legacy_fuel_total
+	if any(key in values for key in ("forecourt_total", "shop_total")):
+		fuel_total = forecourt_total + shop_total
 	return {
 		"cash": str(cash),
 		"vouchers": str(sum_group("voucher_", "vouchers")),
 		"sales_account": str(sales_account),
 		"arrears_account": str(arrears_account),
 		"sales_accounts_combined": str(sales_account + arrears_account),
-		"fuel": str(_fuel_total(values, sum_group)),
+		"fuel": str(fuel_total),
 		"payouts": str(sum_group("payout_", "payout")),
 		"airtime_loaded": str(Decimal(str(values.get("airtime_loaded") or 0))),
 		"eft_driveway": str(sum(Decimal(str(value or 0)) for key, value in values.items() if key.startswith("eft_"))),
@@ -624,6 +740,8 @@ def _fuel_total(values, legacy_sum_group):
 	]
 	if product_values:
 		return sum(product_values, Decimal("0"))
+	if any(key in values for key in ("forecourt_total", "shop_total")):
+		return Decimal(str(values.get("forecourt_total") or 0)) + Decimal(str(values.get("shop_total") or 0))
 	return legacy_sum_group("fuel_")
 
 

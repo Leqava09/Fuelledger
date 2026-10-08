@@ -45,17 +45,39 @@ if (cashUpForm) {
 		total.textContent = Array.from(inputs).reduce((sum, input) => sum + (Number.parseFloat(input.value) || 0), 0).toFixed(2);
 		if (group === "sales_account" || group === "arrears_account") updateCombinedSalesTotal();
 	};
+	const getFirstAirtimeControl = (fieldName) => getControl(fieldName) || getControl(`${fieldName}_1`);
 	const updateAirtimeDifference = () => {
 		const difference = cashUpForm.querySelector("[data-airtime-difference]");
-		const slip = getControl("airtime_slip");
-		const system = getControl("airtime_system");
+		const slip = getFirstAirtimeControl("airtime_slip");
+		const system = getFirstAirtimeControl("airtime_system");
 		if (difference && slip && system) {
 			difference.textContent = ((Number.parseFloat(slip.value) || 0) - (Number.parseFloat(system.value) || 0)).toFixed(2);
+		}
+	};
+	const updateAirtimeBalance = () => {
+		const previousBalance = Number.parseFloat(cashUpForm.dataset.airtimePreviousBalance || "NaN");
+		const countInput = cashUpForm.querySelector('[name="airtime_count"]');
+		const count = Number.parseInt(countInput?.value || "1", 10) || 1;
+		let runningBalance = Number.isFinite(previousBalance) ? previousBalance : 0;
+		for (let index = 1; index <= count; index += 1) {
+			const slip = getControl(index === 1 ? "airtime_slip" : `airtime_slip_${index}`) || getControl(`airtime_slip_${index}`);
+			const loaded = getControl(index === 1 ? "airtime_loaded" : `airtime_loaded_${index}`) || getControl(`airtime_loaded_${index}`);
+			const balanceElement = getControl(index === 1 ? "airtime_balance" : `airtime_balance_${index}`) || getControl(`airtime_balance_${index}`);
+			if (!slip || !loaded || !balanceElement) continue;
+			const slipValue = Number.parseFloat(slip.value) || 0;
+			const loadedValue = Number.parseFloat(loaded.value) || 0;
+			runningBalance = runningBalance - slipValue + loadedValue;
+			balanceElement.value = runningBalance.toFixed(2);
+			if (balanceElement.readOnly || balanceElement.hasAttribute("readonly")) {
+				balanceElement.setAttribute("readonly", "readonly");
+				balanceElement.style.background = "#dff7e1";
+			}
 		}
 	};
 	const updateAllTotals = () => {
 		cashUpForm.querySelectorAll("[data-cash-up-total]").forEach((total) => updateSectionTotal(total.dataset.cashUpTotal));
 		updateAirtimeDifference();
+		updateAirtimeBalance();
 	};
 	const saveDraft = () => {
 		if (!draftScope) return;
@@ -79,14 +101,21 @@ if (cashUpForm) {
 		const row = container.lastElementChild.cloneNode(true);
 		row.querySelectorAll(".errorlist").forEach((errors) => errors.remove());
 		row.querySelectorAll("input").forEach((input) => {
-			const fieldName = input.name.replace(/_\d+$/, `_${nextIndex}`);
+			const baseName = input.name.replace(/_\d+$/, "");
+			const fieldName = `${baseName}_${nextIndex}`;
 			input.name = fieldName;
 			input.id = `id_${fieldName}`;
 			input.value = "";
+			if (input.name.includes("airtime_balance")) {
+				input.setAttribute("readonly", "readonly");
+				input.style.background = "#dff7e1";
+			}
 		});
 		row.querySelectorAll("label[for]").forEach((label) => {
-			label.htmlFor = label.htmlFor.replace(/_\d+$/, `_${nextIndex}`);
-			label.textContent = `${container.dataset.repeatLabel} ${nextIndex}`;
+			const baseFor = label.htmlFor.replace(/_\d+$/, "");
+			label.htmlFor = `${baseFor}_${nextIndex}`;
+			if (group === "airtime") label.textContent = label.textContent.replace(/\d+$/, "") + nextIndex;
+			else label.textContent = `${container.dataset.repeatLabel} ${nextIndex}`;
 		});
 		container.appendChild(row);
 		container.dataset.repeatNext = nextIndex + 1;
@@ -117,6 +146,7 @@ if (cashUpForm) {
 		const group = event.target.dataset.cashUpTotalInput;
 		if (group) updateSectionTotal(group);
 		updateAirtimeDifference();
+		updateAirtimeBalance();
 		saveDraft();
 	});
 	cashUpForm.addEventListener("change", saveDraft);

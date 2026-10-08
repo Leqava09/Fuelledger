@@ -18,7 +18,7 @@
     <button class="button secondary" type="submit" form="cash-up-entry-form" name="save_mode" value="tab">Save this tab</button>
 </div>
 {% include "ledger/cash_up_tabs.html" with active_cash_up_section=section %}
-<form id="cash-up-entry-form" class="entry-form cash-up-form" method="post" data-draft-key="{{ draft_key }}" data-draft-section="{{ section }}" data-has-errors="{% if form.errors %}true{% else %}false{% endif %}">
+<form id="cash-up-entry-form" class="entry-form cash-up-form" method="post" data-draft-key="{{ draft_key }}" data-draft-section="{{ section }}" data-has-errors="{% if form.errors %}true{% else %}false{% endif %}"{% if section == "airtime" %} data-airtime-previous-balance="{{ previous_airtime_balance|default:'0' }}"{% endif %}>
     {% csrf_token %}
     {{ form.business_date }}{{ form.shift_label }}
     <input type="hidden" name="all_tab_values" value="">
@@ -30,29 +30,20 @@
         <div class="airtime-shift-number">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>
         {% endif %}{% endfor %}
     </section>
-    <section class="form-section">
-        <div class="form-section-title"><span>Airtime Slip / System</span></div>
-        <div class="cash-up-fields cash-up-fields--stacked">
-            {% for label, field in field_rows %}{% if field.name == "airtime_slip" or field.name == "airtime_system" %}
-            <div class="form-row">{{ field.label_tag }}<div class="currency-input-line">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ field }}</div>{{ field.errors }}</div>
-            {% endif %}{% endfor %}
+    <section class="form-section airtime-repeat-section">
+        <div class="form-section-title"><span>Airtime Load</span></div>
+        {{ form.airtime_count }}
+        <div class="cash-up-fields cash-up-fields--stacked" data-repeat-container="airtime" data-repeat-label="Airtime" data-repeat-next="{{ form.airtime_count.value|default:1|add:1 }}">
+            {% for row_fields in airtime_rows %}
+            <div class="repeat-entry-row" data-repeat-row>
+                {% for label, field in row_fields %}
+                <div class="form-row">{{ field.label_tag }}<div class="currency-input-line">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ field }}</div>{{ field.errors }}</div>
+                {% endfor %}
+            </div>
+            {% endfor %}
         </div>
+        <button class="add-repeat-row" type="button" data-add-repeat="airtime" aria-label="Add another airtime load"><span aria-hidden="true">+</span></button>
         <div class="calculated-row airtime-difference"><span>Difference</span><div class="calculated-money">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}<strong data-airtime-difference>{{ airtime_difference|floatformat:2 }}</strong></div></div>
-    </section>
-    <section class="form-section">
-        <div class="form-section-title"><span>Airtime Balance</span></div>
-        {% for label, field in field_rows %}{% if field.name == "airtime_balance" %}
-        <div class="form-row">{{ field.label_tag }}<div class="currency-input-line">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ field }}</div>{{ field.errors }}</div>
-        {% endif %}{% endfor %}
-    </section>
-    <section class="form-section">
-        <div class="form-section-title"><span>Airtime Loaded</span></div>
-        {% for label, field in field_rows %}{% if field.name == "airtime_loaded" %}
-        <div class="form-row">{{ field.label_tag }}<div class="currency-input-line">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ field }}</div>{{ field.errors }}</div>
-        {% endif %}{% endfor %}
-    </section>
-    <section class="form-section airtime-total-section">
-        <div class="calculated-row"><span>Total Airtime</span><div class="calculated-money">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}<strong data-airtime-total>—</strong></div></div>
     </section>
     {% elif section == "vouchers" or section == "payouts" %}
     {% for group in repeat_groups %}
@@ -99,16 +90,20 @@
             {% endfor %}
         </div>
         {% elif section == "eft-driveway" %}
-        <p class="empty-state">No EFT/Driveway machines are configured for this site.</p>
+        <p class="empty-state">No EFT machines are configured for this site.</p>
         {% elif section == "manual-shop" %}
-        <p class="empty-state">No Manual/Shop machines are configured for this site.</p>
+        <p class="empty-state">No Manual machines are configured for this site.</p>
         {% elif section == "fuel" %}
-        <p class="empty-state">No tanks are configured for this site.</p>
+        <p class="empty-state">No totals are configured for this site.</p>
         {% else %}
         <p class="empty-state">No additional cash-up entries are configured for this site.</p>
         {% endif %}
         {% if show_total %}
+        {% if section == "fuel" %}
+        <div class="calculated-row"><span>Total amount</span><div class="calculated-money">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}<strong data-cash-up-total="{{ total_group }}">{{ total_amount|floatformat:2 }}</strong></div></div>
+        {% else %}
         <div class="calculated-row"><span>Total {{ section_label }}</span><div class="calculated-money">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}<strong data-cash-up-total="{{ total_group }}">{{ total_amount|floatformat:2 }}</strong></div></div>
+        {% endif %}
         {% endif %}
     </section>
     {% endif %}

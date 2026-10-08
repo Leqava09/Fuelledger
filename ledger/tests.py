@@ -1250,7 +1250,7 @@ class CashUpWorkflowTests(TestCase):
         self.assertContains(response, 'maxlength="10"')
         self.assertContains(response, 'class="airtime-shift-number-input"')
         self.assertContains(response, "Difference")
-        self.assertEqual(response.content.decode().count('class="currency-prefix">ZAR</span>'), 6)
+        self.assertEqual(response.content.decode().count('class="currency-prefix">ZAR</span>'), 5)
         self.assertEqual(self.client.post(
             f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
             {
@@ -1263,8 +1263,36 @@ class CashUpWorkflowTests(TestCase):
         record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
         self.assertEqual(record.values["airtime_shift_nr"], "SHIFT-9")
         self.assertEqual(record.values["airtime_slip"], "8.50")
-        self.assertContains(response, "Total Airtime")
+        self.assertNotContains(response, "Total Airtime")
         self.assertNotContains(response, "Total Airtime Loaded")
+
+    def test_airtime_balance_uses_previous_shift_formula_and_is_read_only_after_first_use(self):
+        CashUpShiftRecord.objects.create(
+            site=self.site,
+            business_date=self.business_date,
+            shift_label="Day",
+            created_by=self.user,
+            values={"airtime_balance": "100.00"},
+        )
+
+        response = self.client.get(self.cash_up_url("airtime"), self.cash_up_query())
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-airtime-previous-balance="100.00"')
+        self.assertContains(response, 'readonly')
+        self.assertContains(response, 'airtime-balance-readonly')
+
+        post_response = self.client.post(
+            f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                "airtime_slip": "20.00",
+                "airtime_loaded": "5.00",
+            },
+        )
+        self.assertEqual(post_response.status_code, 302)
+        record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
+        self.assertEqual(record.values["airtime_balance"], "85.00")
 
     def test_save_and_continue_saves_current_tab_and_opens_next_tab(self):
         response = self.client.post(

@@ -146,6 +146,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .form-row { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .form-row label, .config-field label { color: #405555; font-size: 12px; font-weight: 700; }
 .form-row input, .form-row select, .form-row textarea, .config-field input, .config-field select, .config-field textarea, .login-form input { width: 100%; min-height: 39px; padding: 8px 10px; border: 1px solid #cbd8d3; border-radius: 3px; color: var(--ink); background: white; font: 14px "Aptos", "Segoe UI", sans-serif; }
+.form-row input[readonly], .form-row input:read-only { background: #dff7e1; border-color: #b9ddbf; color: #204f2f; cursor: default; }
 .form-row input:focus, .form-row select:focus, .config-field input:focus, .config-field select:focus, .config-field textarea:focus, .login-form input:focus { outline: 2px solid #a7d5c6; border-color: var(--teal); }
 .form-row small, .config-field small { color: var(--muted); font-size: 11px; }
 .form-row ul.errorlist, .config-field ul.errorlist { margin: 0; padding-left: 16px; color: var(--danger); font-size: 11px; }

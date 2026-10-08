@@ -555,8 +555,8 @@ class EFTDrivewayInline(nested_admin.NestedTabularInline):
 	extra = 0
 	classes = ("fuel-eft-driveway-inline",)
 	fields = ("point_id", "serial_number")
-	verbose_name = "EFT/Driveway"
-	verbose_name_plural = "EFT/Driveway"
+	verbose_name = "EFT"
+	verbose_name_plural = "EFT"
 
 
 class ManualShopPointInline(nested_admin.NestedTabularInline):
@@ -565,8 +565,8 @@ class ManualShopPointInline(nested_admin.NestedTabularInline):
 	extra = 0
 	classes = ("fuel-manual-shop-inline",)
 	fields = ("point_id", "serial_number")
-	verbose_name = "Manual/Shop"
-	verbose_name_plural = "Manual/Shop"
+	verbose_name = "Manual"
+	verbose_name_plural = "Manual"
 
 
 class CashUpAdditionalInline(nested_admin.NestedTabularInline):
