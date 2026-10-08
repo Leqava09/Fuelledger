@@ -16,6 +16,7 @@ from django.contrib.auth.models import User
 from .forms import (
 	BookInFuelForm,
 	CashUpEntryForm,
+	FuelSalesForm,
 	FuelTransferForm,
 	ElectronicReadingForm,
 	MechanicalReadingForm,
@@ -49,6 +50,7 @@ SITE_FORM_LABELS = {
 }
 FUEL_READING_FORM_LABELS = {
 	"tank-reading": "Tank Reading",
+	"fuel-sales": "Fuel Sales",
 	"mechanical-readings": "Mechanical Readings",
 	"electronic-readings": "Electronic Readings",
 }
@@ -111,18 +113,28 @@ def _site_form_permissions(user, site):
 def _can_access_site_form(user, site, form_key):
 	if form_key == "transfer-fuel":
 		form_key = "book-in-fuel"
+	if form_key == "fuel-sales":
+		form_key = "tank-reading"
 	permissions = _site_form_permissions(user, site)
 	if form_key == "daily-fuel-readings":
 		return any(key in permissions for key in FUEL_READING_FORM_LABELS)
 	return form_key in permissions
 
 
-def _fuel_workflow_redirect(request, site, selected_date, shift_label, form_key, label, save_mode, next_form=None):
+def _fuel_workflow_redirect(request, site, selected_date, shift_label, form_key, label, save_mode, next_form=None, stay_on_continue=False):
 	messages.success(request, f"{label} saved.")
 	date_query = f"date={selected_date.isoformat()}&shift={shift_label}"
-	if save_mode == "exit" or (save_mode == "continue" and next_form is None):
+	if save_mode == "exit":
 		return redirect(f"{reverse('site-dashboard', args=[site.slug])}?{date_query}")
 	if save_mode == "continue":
+		if stay_on_continue:
+			if form_key in FUEL_READING_FORM_LABELS:
+				destination = reverse("fuel-reading-entry", args=[site.slug, form_key])
+			else:
+				destination = reverse("blank-site-form", args=[site.slug, form_key])
+			return redirect(f"{destination}?{date_query}")
+		if next_form is None:
+			return redirect(f"{reverse('site-dashboard', args=[site.slug])}?{date_query}")
 		if next_form in FUEL_READING_FORM_LABELS:
 			destination = reverse("fuel-reading-entry", args=[site.slug, next_form])
 		else:
@@ -193,7 +205,7 @@ def site_dashboard(request, slug):
 		"fuel_reading_forms": [
 			{"key": key, "label": label}
 			for key, label in FUEL_READING_FORM_LABELS.items()
-			if key in permissions
+			if key in permissions or (key == "fuel-sales" and "tank-reading" in permissions)
 		],
 		"cash_up_tabs": [
 			{"key": key, "label": tab_label}
@@ -271,6 +283,7 @@ def _transfer_fuel(request, selected_date, shift_label):
 			"transfer-fuel",
 			"Fuel transfer",
 			save_mode,
+			stay_on_continue=True,
 		)
 	transfers = FuelTransfer.objects.filter(
 		site=site,
@@ -377,7 +390,7 @@ def _book_in_fuel(request, label, selected_date, today, shift_label):
 			"book-in-fuel",
 			"Fuel delivery quantities",
 			save_mode,
-			"transfer-fuel",
+			stay_on_continue=True,
 		)
 	delivery_rows = [
 		(
@@ -773,16 +786,6 @@ def _complete_cash_up_save(request, site, record, before, updated_values, select
 			f"{reverse('site-dashboard', args=[site.slug])}"
 			f"?date={selected_date.isoformat()}&shift={shift_label}&cashup_saved=all"
 		)
-	if save_mode == "continue":
-		section_keys = [key for key, _ in _cash_up_tab_labels(site)]
-		next_index = section_keys.index(section) + 1
-		if next_index < len(section_keys):
-			next_url = reverse("cash-up-entry", args=[site.slug, section_keys[next_index]])
-			return redirect(f"{next_url}?date={selected_date.isoformat()}&shift={shift_label}&saved={section}")
-		return redirect(
-			f"{reverse('site-dashboard', args=[site.slug])}"
-			f"?date={selected_date.isoformat()}&shift={shift_label}&cashup_saved={section}"
-		)
 	messages.success(request, f"{section_label_for(section)} saved.")
 	return redirect(
 		f"{reverse('cash-up-entry', args=[site.slug, section])}"
@@ -980,28 +983,41 @@ def fuel_reading_entry(request, slug, reading_type):
 			item.nozzle_id: item
 			for item in reading.nozzle_readings.all()
 		}
-		reading_type_field = "mechanical_reading" if reading_type == "mechanical-readings" else "electronic_reading"
-		initial_nozzle_readings = {
-			nozzle_id: getattr(item, reading_type_field)
-			for nozzle_id, item in existing_nozzle_readings.items()
-			if getattr(item, reading_type_field) is not None
-		}
+		if reading_type in {"mechanical-readings", "electronic-readings"}:
+			reading_type_field = "mechanical_reading" if reading_type == "mechanical-readings" else "electronic_reading"
+			initial_nozzle_readings = {
+				nozzle_id: getattr(item, reading_type_field)
+				for nozzle_id, item in existing_nozzle_readings.items()
+				if getattr(item, reading_type_field) is not None
+			}
 	initial = {"business_date": selected_date, "shift_label": shift_label}
 	form_class = {
 		"tank-reading": TankReadingForm,
+		"fuel-sales": FuelSalesForm,
 		"mechanical-readings": MechanicalReadingForm,
 		"electronic-readings": ElectronicReadingForm,
 	}[reading_type]
-	form = form_class(
-		site,
-		data=request.POST if request.method == "POST" else None,
-		initial=initial,
-		initial_readings=initial_tank_readings if reading_type == "tank-reading" else initial_nozzle_readings,
-	)
+	if reading_type == "fuel-sales":
+		products = _site_fuel_products(tanks)
+		form = form_class(
+			site,
+			products,
+			data=request.POST if request.method == "POST" else None,
+			initial=initial,
+			initial_readings=reading.fuel_sales if reading else {},
+		)
+	else:
+		form = form_class(
+			site,
+			data=request.POST if request.method == "POST" else None,
+			initial=initial,
+			initial_readings=initial_tank_readings if reading_type == "tank-reading" else initial_nozzle_readings,
+		)
 	if request.method == "POST" and form.is_valid():
-		fields = form.tank_fields if reading_type == "tank-reading" else form.nozzle_fields
+		fields = form.tank_fields if reading_type == "tank-reading" else form.product_fields if reading_type == "fuel-sales" else form.nozzle_fields
 		if not fields:
-			form.add_error(None, "Configure the relevant tanks or nozzles for this site before entering readings.")
+			message = "Configure tanks with products for this site before entering fuel sales." if reading_type == "fuel-sales" else "Configure the relevant tanks or nozzles for this site before entering readings."
+			form.add_error(None, message)
 		else:
 			if reading_type == "tank-reading":
 				before = {
@@ -1011,6 +1027,8 @@ def fuel_reading_entry(request, slug, reading_type):
 					}
 					for item in reading.tank_readings.all()
 				} if reading else {}
+			elif reading_type == "fuel-sales":
+				before = dict(reading.fuel_sales) if reading else {}
 			else:
 				field_name = "mechanical_reading" if reading_type == "mechanical-readings" else "electronic_reading"
 				before = {
@@ -1040,6 +1058,12 @@ def fuel_reading_entry(request, slug, reading_type):
 								"depth_cm": form.cleaned_data[depth_field_name],
 							},
 						)
+				elif reading_type == "fuel-sales":
+					reading.fuel_sales = {
+						product: str(form.cleaned_data[field_name] or 0)
+						for product, field_name in form.product_fields
+					}
+					reading.save(update_fields=["fuel_sales", "updated_by", "updated_at"])
 				else:
 					field_name = "mechanical_reading" if reading_type == "mechanical-readings" else "electronic_reading"
 					other_field = "electronic_reading" if field_name == "mechanical_reading" else "mechanical_reading"
@@ -1062,6 +1086,8 @@ def fuel_reading_entry(request, slug, reading_type):
 					}
 					for item in reading.tank_readings.all()
 				}
+			elif reading_type == "fuel-sales":
+				after = dict(reading.fuel_sales)
 			else:
 				after = {
 					str(item.nozzle_id): str(getattr(item, field_name))
@@ -1079,9 +1105,12 @@ def fuel_reading_entry(request, slug, reading_type):
 			)
 			next_reading_type = {
 				"tank-reading": "mechanical-readings",
+				"fuel-sales": "mechanical-readings",
 				"mechanical-readings": "electronic-readings",
 				"electronic-readings": None,
 			}[reading_type]
+			if reading_type == "tank-reading":
+				next_reading_type = "fuel-sales"
 			return _fuel_workflow_redirect(
 				request,
 				site,
@@ -1091,12 +1120,15 @@ def fuel_reading_entry(request, slug, reading_type):
 				form_label,
 				request.POST.get("save_mode", "tab"),
 				next_reading_type,
+				stay_on_continue=True,
 			)
 	if reading_type == "tank-reading":
 		field_rows = [
 			(tank, form[dip_field_name], form[depth_field_name], form[capacity_field_name])
 			for tank, dip_field_name, depth_field_name, capacity_field_name in form.tank_fields
 		]
+	elif reading_type == "fuel-sales":
+		field_rows = [(product, form[field_name]) for product, field_name in form.product_fields]
 	else:
 		field_rows = [(tank, nozzle, form[field_name]) for tank, nozzle, field_name in form.nozzle_fields]
 	return render(request, "ledger/fuel_reading_form.html", {
@@ -1108,6 +1140,7 @@ def fuel_reading_entry(request, slug, reading_type):
 		"form": form,
 		"field_rows": field_rows,
 		"is_tank_reading": reading_type == "tank-reading",
+		"is_fuel_sales": reading_type == "fuel-sales",
 		"history_key": reading_type,
 		"fuel_reading_forms": [
 			{"key": key, "label": label}
@@ -1117,8 +1150,18 @@ def fuel_reading_entry(request, slug, reading_type):
 	})
 
 
+def _site_fuel_products(tanks):
+	products = {}
+	for tank in tanks:
+		product = tank.product.strip()
+		if product:
+			products.setdefault(product.casefold(), product)
+	return list(products.values())
+
+
 def _daily_reading_snapshot(reading):
 	return {
+		"fuel_sales": dict(reading.fuel_sales),
 		"tanks": {
 			str(item.tank_id): {"name": item.tank.name, "dip_litres": str(item.dip_litres)}
 			for item in reading.tank_readings.select_related("tank")

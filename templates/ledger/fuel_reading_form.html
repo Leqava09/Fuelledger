@@ -29,9 +29,20 @@
                 </div>
             </section>
             {% endfor %}
+        {% elif is_fuel_sales %}
+            <div class="reading-table-wrap">
+                <table class="reading-table reading-table--compact-inputs">
+                    <thead><tr><th>Product</th><th>Fuel sales (L)</th></tr></thead>
+                    <tbody>
+                        {% for product, sales_field in field_rows %}
+                        <tr><td>{{ product }}</td><td>{{ sales_field }}{{ sales_field.errors }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         {% else %}
             <div class="reading-table-wrap">
-                <table class="reading-table">
+                <table class="reading-table reading-table--compact-inputs">
                     <thead><tr><th>Tank</th><th>Product</th><th>Nozzle</th><th>{{ form_label }}</th></tr></thead>
                     <tbody>
                         {% for tank, nozzle, reading_field in field_rows %}
@@ -43,6 +54,8 @@
         {% endif %}
     {% elif is_tank_reading %}
         <p class="empty-state">No tanks are configured for this site yet.</p>
+    {% elif is_fuel_sales %}
+        <p class="empty-state">No tank products are configured for this site yet.</p>
     {% else %}
         <p class="empty-state">No nozzles are configured for this site yet.</p>
     {% endif %}

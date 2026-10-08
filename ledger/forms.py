@@ -17,6 +17,10 @@ def _natural_name_key(value):
 	)
 
 
+def _product_key(value):
+	return value.strip().casefold()
+
+
 class BookInFuelForm(forms.Form):
 	business_date = forms.DateField(widget=forms.HiddenInput)
 	shift_label = forms.ChoiceField(widget=forms.HiddenInput)
@@ -377,6 +381,29 @@ class TankReadingForm(SiteReadingForm):
 				initial=tank.capacity_litres,
 			)
 			self.tank_fields.append((tank, dip_field_name, depth_field_name, capacity_field_name))
+
+
+class FuelSalesForm(SiteReadingForm):
+	def __init__(self, site, products, *args, initial_readings=None, **kwargs):
+		super().__init__(site, *args, **kwargs)
+		initial_readings = initial_readings or {}
+		normalized_initial_readings = {
+			_product_key(product): value
+			for product, value in initial_readings.items()
+		}
+		self.product_fields = []
+		for index, product in enumerate(products, start=1):
+			field_name = f"fuel_sales_product_{index}"
+			self.fields[field_name] = forms.DecimalField(
+				label=f"{product} sales (L)",
+				required=False,
+				min_value=0,
+				max_digits=14,
+				decimal_places=2,
+				initial=normalized_initial_readings.get(_product_key(product)),
+				widget=forms.NumberInput(attrs={"min": "0", "step": "0.01"}),
+			)
+			self.product_fields.append((product, field_name))
 
 
 class NozzleReadingForm(SiteReadingForm):
