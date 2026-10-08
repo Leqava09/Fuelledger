@@ -8,13 +8,13 @@
         <h1>{{ form_label }}</h1>
     </div>
     <div class="heading-actions">
-        <a class="button secondary" href="{% url 'site-dashboard' site.slug %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ shift_label|urlencode }}">Return</a>
+        <a class="button secondary" data-unsaved-return href="{% url 'site-dashboard' site.slug %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ shift_label|urlencode }}">Return</a>
         <a class="button secondary" href="{% url 'site-form-history' site.slug 'book-in-fuel' %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ shift_label|urlencode }}">History</a>
     </div>
 </div>
 {% if delivery_rows %}
 {% include "ledger/fuel_workflow_actions.html" with form_id="book-in-form" %}
-<form class="book-in-form" id="book-in-form" method="post" data-max-deliveries="5">
+<form class="book-in-form" id="book-in-form" method="post" data-max-deliveries="5" data-workflow-draft-key="book-in-fuel" data-workflow-draft-scope="{{ request.user.pk }}:{{ site.pk }}:{{ selected_date|date:'Y-m-d' }}:{{ shift_label }}" data-has-errors="{% if form.errors %}true{% else %}false{% endif %}">
     {% csrf_token %}
     {{ form.business_date }}
     {{ form.shift_label }}
@@ -51,4 +51,4 @@
 <p class="empty-state">No tanks are configured for this site yet.</p>
 {% endif %}
 {% endblock %}
-{% block extra_js %}<script src="{% static 'js/book_in_fuel_deliveries.js' %}" defer></script>{% endblock %}
+{% block extra_js %}<script src="{% static 'js/book_in_fuel_deliveries.js' %}" defer></script><script src="{% static 'js/unsaved_form_guard.js' %}" defer></script>{% endblock %}

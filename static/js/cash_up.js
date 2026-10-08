@@ -29,6 +29,7 @@ if (draftScope) {
 if (cashUpForm) {
 	const sectionKey = cashUpForm.dataset.draftSection;
 	const sectionDraft = tabDrafts[sectionKey] && typeof tabDrafts[sectionKey] === "object" ? tabDrafts[sectionKey] : {};
+	if (Object.keys(sectionDraft).length || cashUpForm.dataset.hasErrors === "true") cashUpForm.dataset.workflowDraftDirty = "true";
 	const draftInput = cashUpForm.elements.namedItem("all_tab_values");
 	const getControl = (name) => cashUpForm.elements.namedItem(name);
 	const updateCombinedSalesTotal = () => {
@@ -84,6 +85,7 @@ if (cashUpForm) {
 		updateAirtimeBalance();
 	};
 	const saveDraft = () => {
+		cashUpForm.dataset.workflowDraftDirty = "true";
 		if (!draftScope) return;
 		const values = {};
 		Array.from(cashUpForm.elements).forEach((element) => {

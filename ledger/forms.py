@@ -363,7 +363,7 @@ class TankReadingForm(SiteReadingForm):
 				max_digits=12,
 				decimal_places=2,
 				initial=previous.get("dip_litres"),
-				widget=forms.NumberInput(attrs={"min": "0", "step": "0.01"}),
+				widget=forms.NumberInput(attrs={"min": "0", "step": "0.01", "data-reading-current": "true"}),
 			)
 			self.fields[depth_field_name] = forms.DecimalField(
 				label="Depth (cm)",
@@ -428,7 +428,7 @@ class NozzleReadingForm(SiteReadingForm):
 				max_digits=14,
 				decimal_places=2,
 				initial=initial_readings.get(nozzle.pk),
-				widget=forms.NumberInput(attrs={"min": "0", "step": "0.01"}),
+				widget=forms.NumberInput(attrs={"min": "0", "step": "0.01", "data-reading-current": "true"}),
 			)
 			self.nozzle_fields.append((tank, nozzle, field_name))
 

@@ -124,27 +124,28 @@ def _can_access_site_form(user, site, form_key):
 def _fuel_workflow_redirect(request, site, selected_date, shift_label, form_key, label, save_mode, next_form=None, stay_on_continue=False):
 	messages.success(request, f"{label} saved.")
 	date_query = f"date={selected_date.isoformat()}&shift={shift_label}"
+	draft_saved_query = f"&workflow_saved={form_key}"
 	if save_mode == "exit":
-		return redirect(f"{reverse('site-dashboard', args=[site.slug])}?{date_query}")
+		return redirect(f"{reverse('site-dashboard', args=[site.slug])}?{date_query}{draft_saved_query}")
 	if save_mode == "continue":
 		if stay_on_continue:
 			if form_key in FUEL_READING_FORM_LABELS:
 				destination = reverse("fuel-reading-entry", args=[site.slug, form_key])
 			else:
 				destination = reverse("blank-site-form", args=[site.slug, form_key])
-			return redirect(f"{destination}?{date_query}")
+			return redirect(f"{destination}?{date_query}{draft_saved_query}")
 		if next_form is None:
-			return redirect(f"{reverse('site-dashboard', args=[site.slug])}?{date_query}")
+			return redirect(f"{reverse('site-dashboard', args=[site.slug])}?{date_query}{draft_saved_query}")
 		if next_form in FUEL_READING_FORM_LABELS:
 			destination = reverse("fuel-reading-entry", args=[site.slug, next_form])
 		else:
 			destination = reverse("blank-site-form", args=[site.slug, next_form])
-		return redirect(f"{destination}?{date_query}")
+		return redirect(f"{destination}?{date_query}{draft_saved_query}")
 	if form_key in FUEL_READING_FORM_LABELS:
 		destination = reverse("fuel-reading-entry", args=[site.slug, form_key])
 	else:
 		destination = reverse("blank-site-form", args=[site.slug, form_key])
-	return redirect(f"{destination}?{date_query}")
+	return redirect(f"{destination}?{date_query}{draft_saved_query}")
 
 
 def _record_audit(site, actor, category, object_label, action, before=None, after=None):
@@ -784,12 +785,12 @@ def _complete_cash_up_save(request, site, record, before, updated_values, select
 		messages.success(request, "All cash-up sections saved.")
 		return redirect(
 			f"{reverse('site-dashboard', args=[site.slug])}"
-			f"?date={selected_date.isoformat()}&shift={shift_label}&cashup_saved=all"
+			f"?date={selected_date.isoformat()}&shift={shift_label}&cashup_saved=all&workflow_saved={section}"
 		)
 	messages.success(request, f"{section_label_for(section)} saved.")
 	return redirect(
 		f"{reverse('cash-up-entry', args=[site.slug, section])}"
-		f"?date={selected_date.isoformat()}&shift={shift_label}&saved={section}"
+		f"?date={selected_date.isoformat()}&shift={shift_label}&saved={section}&workflow_saved={section}"
 	)
 
 
@@ -971,6 +972,26 @@ def fuel_reading_entry(request, slug, reading_type):
 		business_date=selected_date,
 		shift_label=shift_label,
 	).first()
+	previous_reading = None
+	if reading_type in {"tank-reading", "mechanical-readings", "electronic-readings"}:
+		previous_reading = _previous_daily_reading(site, selected_date, shift_label, reading_type)
+	previous_tank_readings = {}
+	previous_nozzle_readings = {}
+	if previous_reading is not None:
+		previous_tank_readings = {
+			item.tank_id: (item.tank.product, item.dip_litres)
+			for item in previous_reading.tank_readings.select_related("tank")
+		}
+		previous_field = {
+			"mechanical-readings": "mechanical_reading",
+			"electronic-readings": "electronic_reading",
+		}.get(reading_type)
+		if previous_field:
+			previous_nozzle_readings = {
+				item.nozzle_id: getattr(item, previous_field)
+				for item in previous_reading.nozzle_readings.all()
+				if getattr(item, previous_field) is not None
+			}
 	initial_tank_readings = {}
 	initial_nozzle_readings = {}
 	existing_nozzle_readings = {}
@@ -1124,13 +1145,38 @@ def fuel_reading_entry(request, slug, reading_type):
 			)
 	if reading_type == "tank-reading":
 		field_rows = [
-			(tank, form[dip_field_name], form[depth_field_name], form[capacity_field_name])
+			{
+				"tank": tank,
+				"dip": form[dip_field_name],
+				"depth": form[depth_field_name],
+				"capacity": form[capacity_field_name],
+				"previous": previous_tank_readings.get(tank.pk, (None, None))[1]
+				if previous_tank_readings.get(tank.pk, (None, None))[0] is not None
+				and previous_tank_readings[tank.pk][0].strip().casefold() == tank.product.strip().casefold()
+				else None,
+				"difference": _fuel_reading_difference(
+					previous_tank_readings.get(tank.pk, (None, None))[1]
+					if previous_tank_readings.get(tank.pk, (None, None))[0] is not None
+					and previous_tank_readings[tank.pk][0].strip().casefold() == tank.product.strip().casefold()
+					else None,
+					form[dip_field_name].value(),
+				),
+			}
 			for tank, dip_field_name, depth_field_name, capacity_field_name in form.tank_fields
 		]
 	elif reading_type == "fuel-sales":
 		field_rows = [(product, form[field_name]) for product, field_name in form.product_fields]
 	else:
-		field_rows = [(tank, nozzle, form[field_name]) for tank, nozzle, field_name in form.nozzle_fields]
+		field_rows = [
+			{
+				"tank": tank,
+				"nozzle": nozzle,
+				"reading": form[field_name],
+				"previous": previous_nozzle_readings.get(nozzle.pk),
+				"difference": _fuel_reading_difference(previous_nozzle_readings.get(nozzle.pk), form[field_name].value()),
+			}
+			for tank, nozzle, field_name in form.nozzle_fields
+		]
 	return render(request, "ledger/fuel_reading_form.html", {
 		"site": site,
 		"selected_date": selected_date,
@@ -1141,6 +1187,7 @@ def fuel_reading_entry(request, slug, reading_type):
 		"field_rows": field_rows,
 		"is_tank_reading": reading_type == "tank-reading",
 		"is_fuel_sales": reading_type == "fuel-sales",
+		"previous_reading": previous_reading,
 		"history_key": reading_type,
 		"fuel_reading_forms": [
 			{"key": key, "label": label}
@@ -1157,6 +1204,44 @@ def _site_fuel_products(tanks):
 		if product:
 			products.setdefault(product.casefold(), product)
 	return list(products.values())
+
+
+def _previous_daily_reading(site, selected_date, shift_label, reading_type):
+	shift_names = site.get_shift_names()
+	if shift_label not in shift_names:
+		return None
+	query = DailyFuelReading.objects.filter(
+		site=site,
+		business_date__gte=selected_date - timedelta(days=365),
+		business_date__lte=selected_date,
+	)
+	if reading_type == "tank-reading":
+		query = query.filter(tank_readings__isnull=False)
+	elif reading_type == "mechanical-readings":
+		query = query.filter(nozzle_readings__mechanical_reading__isnull=False)
+	else:
+		query = query.filter(nozzle_readings__electronic_reading__isnull=False)
+	shift_order = {name: index for index, name in enumerate(shift_names)}
+	current_order = shift_order[shift_label]
+	candidates = query.distinct().prefetch_related("tank_readings__tank", "nozzle_readings")
+	for candidate in sorted(
+		candidates,
+		key=lambda item: (item.business_date, shift_order.get(item.shift_label, -1)),
+		reverse=True,
+	):
+		if candidate.business_date == selected_date and shift_order.get(candidate.shift_label, -1) >= current_order:
+			continue
+		return candidate
+	return None
+
+
+def _fuel_reading_difference(previous, current):
+	if previous in (None, "") or current in (None, ""):
+		return None
+	try:
+		return Decimal(str(previous)) - Decimal(str(current))
+	except (ArithmeticError, TypeError, ValueError):
+		return None
 
 
 def _daily_reading_snapshot(reading):
