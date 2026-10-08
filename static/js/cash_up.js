@@ -45,24 +45,28 @@ if (cashUpForm) {
 		total.textContent = Array.from(inputs).reduce((sum, input) => sum + (Number.parseFloat(input.value) || 0), 0).toFixed(2);
 		if (group === "sales_account" || group === "arrears_account") updateCombinedSalesTotal();
 	};
-	const getFirstAirtimeControl = (fieldName) => getControl(fieldName) || getControl(`${fieldName}_1`);
 	const updateAirtimeDifference = () => {
-		const difference = cashUpForm.querySelector("[data-airtime-difference]");
-		const slip = getFirstAirtimeControl("airtime_slip");
-		const system = getFirstAirtimeControl("airtime_system");
-		if (difference && slip && system) {
-			difference.textContent = ((Number.parseFloat(slip.value) || 0) - (Number.parseFloat(system.value) || 0)).toFixed(2);
-		}
+		cashUpForm.querySelectorAll('[data-repeat-container="airtime"] [data-repeat-row]').forEach((row) => {
+			const difference = row.querySelector("[data-airtime-difference]");
+			const slip = row.querySelector('input[name^="airtime_slip"]');
+			const system = row.querySelector('input[name^="airtime_system"]');
+			if (difference && slip && system) {
+				difference.textContent = ((Number.parseFloat(slip.value) || 0) - (Number.parseFloat(system.value) || 0)).toFixed(2);
+			}
+		});
 	};
 	const updateAirtimeBalance = () => {
+		const canEditFirstCard = cashUpForm.dataset.airtimeFirstCardEditable === "true";
 		const previousBalance = Number.parseFloat(cashUpForm.dataset.airtimePreviousBalance || "NaN");
 		const countInput = cashUpForm.querySelector('[name="airtime_count"]');
 		const count = Number.parseInt(countInput?.value || "1", 10) || 1;
-		let runningBalance = Number.isFinite(previousBalance) ? previousBalance : 0;
-		for (let index = 1; index <= count; index += 1) {
-			const slip = getControl(index === 1 ? "airtime_slip" : `airtime_slip_${index}`) || getControl(`airtime_slip_${index}`);
-			const loaded = getControl(index === 1 ? "airtime_loaded" : `airtime_loaded_${index}`) || getControl(`airtime_loaded_${index}`);
-			const balanceElement = getControl(index === 1 ? "airtime_balance" : `airtime_balance_${index}`) || getControl(`airtime_balance_${index}`);
+		const firstBalance = getControl("airtime_balance_1") || getControl("airtime_balance");
+		let runningBalance = canEditFirstCard ? Number.parseFloat(firstBalance?.value || "NaN") : previousBalance;
+		if (!Number.isFinite(runningBalance)) runningBalance = Number.isFinite(previousBalance) ? previousBalance : Number.parseFloat(firstBalance?.value || "0") || 0;
+		for (let index = canEditFirstCard ? 2 : 1; index <= count; index += 1) {
+			const slip = getControl(`airtime_slip_${index}`);
+			const loaded = getControl(`airtime_loaded_${index}`);
+			const balanceElement = getControl(`airtime_balance_${index}`);
 			if (!slip || !loaded || !balanceElement) continue;
 			const slipValue = Number.parseFloat(slip.value) || 0;
 			const loadedValue = Number.parseFloat(loaded.value) || 0;
@@ -114,19 +118,65 @@ if (cashUpForm) {
 		row.querySelectorAll("label[for]").forEach((label) => {
 			const baseFor = label.htmlFor.replace(/_\d+$/, "");
 			label.htmlFor = `${baseFor}_${nextIndex}`;
-			if (group === "airtime") label.textContent = label.textContent.replace(/\d+$/, "") + nextIndex;
+			if (group === "airtime") {
+				const baseName = baseFor.replace(/^id_/, "").replace(/_\d+$/, "");
+				const labels = {airtime_shift_nr: "Airtime Shift Number", airtime_slip: "Airtime Slip", airtime_system: "Airtime System", airtime_loaded: "Airtime Loaded", airtime_balance: "Airtime Balance"};
+				label.textContent = `${labels[baseName] || "Airtime"} ${nextIndex}:`;
+			}
 			else label.textContent = `${container.dataset.repeatLabel} ${nextIndex}`;
+		});
+		row.querySelectorAll("[data-remove-repeat]").forEach((removeButton) => {
+			removeButton.disabled = false;
+			removeButton.setAttribute("aria-label", `Remove Airtime entry ${nextIndex}`);
 		});
 		container.appendChild(row);
 		container.dataset.repeatNext = nextIndex + 1;
 		countInput.value = nextIndex;
 		if (container.children.length >= 50 && button) button.disabled = true;
 	};
+	const removeRepeatRow = (button) => {
+		const row = button.closest("[data-repeat-row]");
+		const container = row?.parentElement;
+		const countInput = cashUpForm.querySelector('[data-repeat-count="airtime"]');
+		if (!row || !container || container.children.length <= 1 || row === container.firstElementChild) return;
+		row.remove();
+		Array.from(container.children).forEach((entry, offset) => {
+			const index = offset + 1;
+			entry.querySelectorAll("input").forEach((input) => {
+				const match = input.name.match(/^(airtime_(?:shift_nr|slip|system|loaded|balance))(?:_\d+)?$/);
+				if (!match) return;
+				input.name = match[1] === "airtime_shift_nr" && index === 1 ? match[1] : `${match[1]}_${index}`;
+				input.id = `id_${input.name}`;
+			});
+			entry.querySelectorAll("label[for]").forEach((label) => {
+				const baseName = label.htmlFor.replace(/^id_/, "").replace(/_\d+$/, "");
+				const labels = {airtime_shift_nr: "Airtime Shift Number", airtime_slip: "Airtime Slip", airtime_system: "Airtime System", airtime_loaded: "Airtime Loaded", airtime_balance: "Airtime Balance"};
+				label.htmlFor = `id_${baseName === "airtime_shift_nr" && index === 1 ? baseName : `${baseName}_${index}`}`;
+				label.textContent = `${labels[baseName] || "Airtime"}${index > 1 ? ` ${index}` : ""}:`;
+			});
+			const removeButton = entry.querySelector("[data-remove-repeat]");
+			if (removeButton) {
+				removeButton.disabled = index === 1;
+				removeButton.setAttribute("aria-label", `Remove Airtime entry ${index}`);
+			}
+		});
+		countInput.value = container.children.length;
+		container.dataset.repeatNext = container.children.length + 1;
+		const addButton = cashUpForm.querySelector('[data-add-repeat="airtime"]');
+		if (addButton) addButton.disabled = container.children.length >= 50;
+		updateAllTotals();
+		saveDraft();
+	};
 
 	cashUpForm.querySelectorAll("[data-add-repeat]").forEach((button) => button.addEventListener("click", () => {
 		addRepeatRow(button.dataset.addRepeat, button);
+		updateAllTotals();
 		saveDraft();
 	}));
+	cashUpForm.addEventListener("click", (event) => {
+		const removeButton = event.target.closest("[data-remove-repeat]");
+		if (removeButton) removeRepeatRow(removeButton);
+	});
 	if (cashUpForm.dataset.hasErrors !== "true") {
 		cashUpForm.querySelectorAll("[data-repeat-container]").forEach((container) => {
 			const group = container.dataset.repeatContainer;

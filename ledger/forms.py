@@ -160,10 +160,11 @@ class CashUpEntryForm(forms.Form):
 	business_date = forms.DateField(widget=forms.HiddenInput)
 	shift_label = forms.CharField(widget=forms.HiddenInput)
 
-	def __init__(self, site, section, *args, initial_values=None, previous_airtime_balance=None, **kwargs):
+	def __init__(self, site, section, *args, initial_values=None, airtime_first_card_editable=False, **kwargs):
 		super().__init__(*args, **kwargs)
 		self.site = site
 		self.section = section
+		self.airtime_first_card_editable = airtime_first_card_editable
 		self.entry_fields = []
 		self.repeat_groups = []
 		initial_values = initial_values or {}
@@ -174,7 +175,7 @@ class CashUpEntryForm(forms.Form):
 			self._add_repeating_money_fields("vouchers", "Voucher", "voucher", "voucher_count", initial_values, "vouchers")
 		elif section == "airtime":
 			self._add_text_field("airtime_shift_nr", "Airtime Shift Number", initial_values, max_length=10)
-			self._add_repeating_airtime_fields(initial_values, previous_airtime_balance)
+			self._add_repeating_airtime_fields(initial_values)
 		elif section == "sales-account":
 			self._add_repeating_money_fields("sales_account", "Account", "sales_account", "sales_account_count", initial_values)
 			self._add_repeating_money_fields("arrears_account", "Arrears Account", "arrears_account", "arrears_account_count", initial_values)
@@ -252,10 +253,10 @@ class CashUpEntryForm(forms.Form):
 			"count": row_count,
 		})
 
-	def _add_repeating_airtime_fields(self, initial_values, previous_airtime_balance=None):
+	def _add_repeating_airtime_fields(self, initial_values):
 		indexes = []
 		for key in initial_values:
-			for field_name in ("airtime_slip", "airtime_system", "airtime_loaded", "airtime_balance"):
+			for field_name in ("airtime_shift_nr", "airtime_slip", "airtime_system", "airtime_loaded", "airtime_balance"):
 				prefix = f"{field_name}_"
 				if key.startswith(prefix) and key[len(prefix):].isdigit():
 					indexes.append(int(key[len(prefix):]))
@@ -277,6 +278,16 @@ class CashUpEntryForm(forms.Form):
 			widget=forms.HiddenInput(attrs={"data-repeat-count": "airtime"}),
 		)
 		for index in range(1, row_count + 1):
+			if index > 1:
+				key = f"airtime_shift_nr_{index}"
+				self.fields[key] = forms.CharField(
+					label=f"Airtime Shift Number {index}",
+					required=False,
+					max_length=10,
+					initial=initial_values.get(key, ""),
+					widget=forms.TextInput(attrs={"maxlength": "10", "class": "airtime-shift-number-input"}),
+				)
+				self.entry_fields.append((key, self.fields[key].label))
 			for field_name, label in (
 				("airtime_slip", "Airtime Slip"),
 				("airtime_system", "Airtime System"),
@@ -298,7 +309,7 @@ class CashUpEntryForm(forms.Form):
 					widget=forms.NumberInput(attrs={"min": "0", "max": "100000000", "step": "0.01", "data-cash-up-total-input": "airtime"}),
 				)
 				self.entry_fields.append((key, self.fields[key].label))
-				if field_name == "airtime_balance" and previous_airtime_balance is not None:
+				if field_name == "airtime_balance" and (index > 1 or not self.airtime_first_card_editable):
 					self.fields[key].widget.attrs["readonly"] = "readonly"
 					self.fields[key].widget.attrs["aria-readonly"] = "true"
 					self.fields[key].widget.attrs["class"] = "airtime-balance-readonly"

@@ -1,11 +1,13 @@
 from io import BytesIO
+import calendar
 import json
 import re
 import tempfile
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 from html import unescape
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.contrib import admin
 from django.contrib.auth.models import User
@@ -1112,12 +1114,21 @@ class CashUpWorkflowTests(TestCase):
     def cash_up_query(self):
         return {"date": self.business_date.isoformat(), "shift": "Night"}
 
+    def test_non_airtime_tab_skips_airtime_history_lookup(self):
+        with patch("ledger.views._previous_airtime_balance") as airtime_balance_lookup:
+            response = self.client.get(self.cash_up_url("cash"), self.cash_up_query())
+
+        self.assertEqual(response.status_code, 200)
+        airtime_balance_lookup.assert_not_called()
+
     def test_cash_up_tabs_are_shown_on_dashboard_and_entry_page(self):
+        CashUpAdditional.objects.create(site=self.site, additional_field="Till variance")
         dashboard = self.client.get(
             reverse("site-dashboard", args=[self.site.slug]),
             self.cash_up_query(),
         )
         self.assertEqual(dashboard.status_code, 200)
+        self.assertContains(dashboard, reverse("cash-up-reports", args=[self.site.slug]))
         cash_page = self.client.get(self.cash_up_url("cash"), self.cash_up_query())
         self.assertEqual(cash_page.status_code, 200)
         for section, label in (
@@ -1127,9 +1138,10 @@ class CashUpWorkflowTests(TestCase):
             ("sales-account", "Account"),
             ("fuel", "Fuel"),
             ("payouts", "Payouts"),
-            ("eft-driveway", "EFT/Driveway"),
-            ("manual-shop", "Manual/Shop"),
+            ("eft-driveway", "EFT"),
+            ("manual-shop", "Manual"),
             ("cash-up-additional", "Additional"),
+            ("summary", "Summary"),
         ):
             self.assertContains(dashboard, self.cash_up_url(section))
             self.assertContains(cash_page, label)
@@ -1148,6 +1160,158 @@ class CashUpWorkflowTests(TestCase):
         self.assertLess(cash_page_html.index("cash-up-actions--top"), cash_page_html.index('aria-label="Cash up sections"'))
         self.assertContains(cash_page, "cash-up-page-heading")
         self.assertContains(cash_page, "cash-up-form")
+
+    def test_cash_up_summary_reconciles_saved_shift_totals_in_site_currency(self):
+        additional = CashUpAdditional.objects.create(site=self.site, additional_field="Till variance")
+        CashUpShiftRecord.objects.create(
+            site=self.site,
+            business_date=self.business_date,
+            shift_label="Night",
+            created_by=self.user,
+            values={
+                "coins": "30.00",
+                "safedrops": "20.00",
+                "voucher_1": "6.00",
+                "voucher_2": "4.00",
+                "sales_account_1": "20.00",
+                "arrears_account_1": "10.00",
+                "forecourt_total": "130.00",
+                "shop_total": "0.00",
+                "payout_1": "2.00",
+                "eft_1": "15.00",
+                "manual_1": "7.00",
+                f"additional_{additional.pk}": "8.00",
+                "airtime_slip_1": "3.00",
+                "airtime_slip_2": "4.00",
+            },
+        )
+
+        response = self.client.get(self.cash_up_url("summary"), self.cash_up_query())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Total Cash")
+        self.assertContains(response, "Total Vouchers")
+        self.assertContains(response, "Combined Sales and Arrears")
+        self.assertContains(response, "Total EFT")
+        self.assertContains(response, "Total Manual")
+        self.assertContains(response, "Total Additional")
+        self.assertContains(response, "Total Airtime Slip")
+        self.assertContains(response, "Total Payouts")
+        self.assertContains(response, "cash-up-summary-row--payouts")
+        self.assertContains(response, "Total Amount Accounted For")
+        self.assertContains(response, "Total Sales")
+        self.assertContains(response, "Difference (Accounted For - Total Sales)")
+        self.assertContains(response, "129.00")
+        self.assertContains(response, "130.00")
+        self.assertContains(response, "-1.00")
+        self.assertEqual(response.content.decode().count('class="currency-prefix">ZAR</span>'), 11)
+        self.assertNotContains(response, "Save and Continue")
+
+    def test_additional_tab_and_summary_amount_follow_site_registration(self):
+        record = CashUpShiftRecord.objects.create(
+            site=self.site,
+            business_date=self.business_date,
+            shift_label="Night",
+            created_by=self.user,
+            values={"forecourt_total": "100.00", "additional_999": "50.00"},
+        )
+        dashboard = self.client.get(reverse("site-dashboard", args=[self.site.slug]), self.cash_up_query())
+        cash_page = self.client.get(self.cash_up_url("cash"), self.cash_up_query())
+        summary_page = self.client.get(self.cash_up_url("summary"), self.cash_up_query())
+        self.assertNotContains(dashboard, self.cash_up_url("cash-up-additional"))
+        self.assertNotContains(cash_page, ">Additional</a>")
+        self.assertNotContains(summary_page, "Total Additional")
+        self.assertNotContains(summary_page, "50.00")
+
+        additional = CashUpAdditional.objects.create(site=self.site, additional_field="Till variance")
+        record.values[f"additional_{additional.pk}"] = "8.00"
+        record.save(update_fields=["values", "updated_at"])
+        dashboard = self.client.get(reverse("site-dashboard", args=[self.site.slug]), self.cash_up_query())
+        cash_page = self.client.get(self.cash_up_url("cash"), self.cash_up_query())
+        summary_page = self.client.get(self.cash_up_url("summary"), self.cash_up_query())
+        self.assertContains(dashboard, self.cash_up_url("cash-up-additional"))
+        self.assertContains(cash_page, ">Additional</a>")
+        self.assertContains(summary_page, "Total Additional")
+        self.assertContains(summary_page, "8.00")
+        self.assertContains(summary_page, "-92.00")
+
+        additional.delete()
+        dashboard = self.client.get(reverse("site-dashboard", args=[self.site.slug]), self.cash_up_query())
+        cash_page = self.client.get(self.cash_up_url("cash"), self.cash_up_query())
+        summary_page = self.client.get(self.cash_up_url("summary"), self.cash_up_query())
+        self.assertNotContains(dashboard, self.cash_up_url("cash-up-additional"))
+        self.assertNotContains(cash_page, ">Additional</a>")
+        self.assertNotContains(summary_page, "Total Additional")
+        self.assertNotContains(summary_page, "8.00")
+        self.assertContains(summary_page, "100.00")
+
+    def test_cash_up_reports_roll_up_periods_and_filter_by_shift(self):
+        week_start = self.business_date - timedelta(days=self.business_date.weekday())
+        additional = CashUpAdditional.objects.create(site=self.site, additional_field="Till variance")
+        records = (
+            (week_start, "Day", {"coins": "10.00", "forecourt_total": "100.00", "airtime_slip_1": "5.00", f"additional_{additional.pk}": "2.00"}),
+            (week_start, "Night", {"coins": "20.00", "forecourt_total": "200.00", "payout_1": "5.00"}),
+            (week_start + timedelta(days=1), "Night", {"coins": "30.00", "forecourt_total": "300.00"}),
+        )
+        for business_date, shift_label, values in records:
+            CashUpShiftRecord.objects.create(
+                site=self.site,
+                business_date=business_date,
+                shift_label=shift_label,
+                created_by=self.user,
+                values=values,
+            )
+
+        report_url = reverse("cash-up-reports", args=[self.site.slug])
+        week_report = self.client.get(report_url, {"period": "week", "date": week_start.isoformat()})
+        self.assertEqual(week_report.status_code, 200)
+        self.assertEqual(week_report.context["report_start"], week_start)
+        self.assertEqual(week_report.context["report_end"], week_start + timedelta(days=6))
+        self.assertEqual(week_report.context["summary_accounted_total"], Decimal("72.00"))
+        self.assertEqual(week_report.context["summary_total_sales"], Decimal("600.00"))
+        self.assertEqual(week_report.context["summary_difference"], Decimal("-528.00"))
+        self.assertEqual(len(week_report.context["report_rows"]), 3)
+        self.assertEqual([row["shift"] for row in week_report.context["report_rows"]], ["Day", "Night", "Night"])
+
+        day_report = self.client.get(report_url, {"period": "week", "date": week_start.isoformat(), "shift": "Day"})
+        self.assertEqual(day_report.context["summary_accounted_total"], Decimal("17.00"))
+        self.assertEqual(day_report.context["summary_total_sales"], Decimal("100.00"))
+        self.assertEqual(len(day_report.context["report_rows"]), 1)
+
+        manual_report = self.client.get(report_url, {
+            "period": "manual",
+            "start_date": week_start.isoformat(),
+            "end_date": week_start.isoformat(),
+        })
+        self.assertEqual(manual_report.context["summary_accounted_total"], Decimal("42.00"))
+        self.assertEqual(manual_report.context["summary_total_sales"], Decimal("300.00"))
+        self.assertEqual(len(manual_report.context["report_rows"]), 2)
+
+        for period, expected_start, expected_end in (
+            ("day", week_start, week_start),
+            ("month", week_start.replace(day=1), week_start.replace(day=calendar.monthrange(week_start.year, week_start.month)[1])),
+            ("year", date(week_start.year, 1, 1), date(week_start.year, 12, 31)),
+        ):
+            response = self.client.get(report_url, {"period": period, "date": week_start.isoformat()})
+            self.assertEqual(response.context["report_start"], expected_start)
+            self.assertEqual(response.context["report_end"], expected_end)
+
+    def test_airtime_save_and_continue_opens_summary_tab(self):
+        response = self.client.post(
+            f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                "airtime_shift_nr": "SHIFT-1",
+                "airtime_balance_1": "100.00",
+                "save_mode": "continue",
+            },
+        )
+
+        self.assertRedirects(
+            response,
+            f"{self.cash_up_url('summary')}?date={self.business_date.isoformat()}&shift=Night&saved=airtime",
+        )
 
     def test_cash_coins_and_safedrops_are_saved_and_totalled(self):
         response = self.client.post(
@@ -1250,6 +1414,8 @@ class CashUpWorkflowTests(TestCase):
         self.assertContains(response, 'maxlength="10"')
         self.assertContains(response, 'class="airtime-shift-number-input"')
         self.assertContains(response, "Difference")
+        first_balance = re.search(r'<input[^>]*name="airtime_balance_1"[^>]*>', response.content.decode()).group()
+        self.assertNotIn("readonly", first_balance)
         self.assertEqual(response.content.decode().count('class="currency-prefix">ZAR</span>'), 5)
         self.assertEqual(self.client.post(
             f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
@@ -1266,7 +1432,7 @@ class CashUpWorkflowTests(TestCase):
         self.assertNotContains(response, "Total Airtime")
         self.assertNotContains(response, "Total Airtime Loaded")
 
-    def test_airtime_balance_uses_previous_shift_formula_and_is_read_only_after_first_use(self):
+    def test_airtime_first_balance_is_manual_and_later_balances_chain(self):
         CashUpShiftRecord.objects.create(
             site=self.site,
             business_date=self.business_date,
@@ -1278,21 +1444,163 @@ class CashUpWorkflowTests(TestCase):
         response = self.client.get(self.cash_up_url("airtime"), self.cash_up_query())
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'data-airtime-previous-balance="100.00"')
-        self.assertContains(response, 'readonly')
-        self.assertContains(response, 'airtime-balance-readonly')
+        first_balance = re.search(r'<input[^>]*name="airtime_balance_1"[^>]*>', response.content.decode()).group()
+        first_slip = re.search(r'<input[^>]*name="airtime_slip_1"[^>]*>', response.content.decode()).group()
+        self.assertIn("readonly", first_balance)
+        self.assertNotIn("readonly", first_slip)
 
         post_response = self.client.post(
             f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
             {
                 "business_date": self.business_date.isoformat(),
                 "shift_label": "Night",
-                "airtime_slip": "20.00",
-                "airtime_loaded": "5.00",
+                "airtime_count": "2",
+                "airtime_balance_1": "110.00",
+                "airtime_slip_1": "20.00",
+                "airtime_loaded_1": "5.00",
+                "airtime_slip_2": "10.00",
+                "airtime_loaded_2": "2.00",
             },
         )
         self.assertEqual(post_response.status_code, 302)
         record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
-        self.assertEqual(record.values["airtime_balance"], "85.00")
+        self.assertEqual(record.values["airtime_balance_1"], "85.00")
+        self.assertEqual(record.values["airtime_balance_2"], "77.00")
+
+        response = self.client.get(self.cash_up_url("airtime"), self.cash_up_query())
+        html = response.content.decode()
+        second_balance = re.search(r'<input[^>]*name="airtime_balance_2"[^>]*>', html).group()
+        self.assertIn("readonly", second_balance)
+        self.assertIn("airtime-balance-readonly", second_balance)
+
+        post_response = self.client.post(
+            f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                "airtime_count": "2",
+                "airtime_balance_1": "110.00",
+                "airtime_slip_1": "20.00",
+                "airtime_loaded_1": "5.00",
+            },
+        )
+        self.assertEqual(post_response.status_code, 302)
+        record.refresh_from_db()
+        self.assertEqual(record.values["airtime_balance_2"], "85.00")
+
+    def test_airtime_starting_balance_follows_one_two_and_three_shift_order(self):
+        previous_date = self.business_date - timedelta(days=1)
+
+        def save_record(business_date, shift_label, balance_values):
+            CashUpShiftRecord.objects.create(
+                site=self.site,
+                business_date=business_date,
+                shift_label=shift_label,
+                created_by=self.user,
+                values=balance_values,
+            )
+
+        def assert_starting_balance(shift_label, expected, displayed=None):
+            response = self.client.get(
+                self.cash_up_url("airtime"),
+                {"date": self.business_date.isoformat(), "shift": shift_label},
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertContains(response, f'data-airtime-previous-balance="{expected}"')
+            balance_input = re.search(r'<input[^>]*name="airtime_balance_1"[^>]*>', response.content.decode()).group()
+            self.assertIn(f'value="{displayed or expected}"', balance_input)
+
+        save_record(previous_date, "Day", {"airtime_balance_1": "11.00", "airtime_balance": "11.00"})
+        self.site.shift_count = 1
+        self.site.save(update_fields=["shift_count"])
+        assert_starting_balance("Day", "11.00")
+
+        CashUpShiftRecord.objects.filter(site=self.site).delete()
+        self.site.shift_count = 2
+        self.site.save(update_fields=["shift_count"])
+        save_record(previous_date, "Night", {"airtime_balance": "90.00"})
+        save_record(self.business_date, "Day", {
+            "airtime_balance_1": "20.00",
+            "airtime_balance_2": "25.00",
+            "airtime_balance": "25.00",
+            "airtime_slip_1": "5.00",
+        })
+        save_record(self.business_date, "Night", {"airtime_balance_1": "5670.00", "airtime_balance": "5670.00"})
+        assert_starting_balance("Night", "25.00")
+        assert_starting_balance("Day", "90.00", "85.00")
+
+        CashUpShiftRecord.objects.filter(site=self.site).delete()
+        self.site.shift_count = 3
+        self.site.save(update_fields=["shift_count"])
+        save_record(previous_date, "Evening", {"airtime_balance": "90.00"})
+        save_record(self.business_date, "Morning", {"airtime_balance": "30.00"})
+        save_record(self.business_date, "Afternoon", {
+            "airtime_balance_1": "31.00",
+            "airtime_balance_2": "32.00",
+            "airtime_balance": "32.00",
+            "airtime_slip_1": "1.00",
+        })
+        assert_starting_balance("Evening", "32.00")
+        assert_starting_balance("Afternoon", "30.00", "29.00")
+        assert_starting_balance("Morning", "90.00")
+
+    def test_airtime_multiple_entries_save_and_reload_with_individual_differences(self):
+        response = self.client.post(
+            f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                "airtime_count": "2",
+                "airtime_shift_nr": "SHIFT-1",
+                "airtime_shift_nr_2": "SHIFT-2",
+                "airtime_balance_1": "50.00",
+                "airtime_slip_1": "12.00",
+                "airtime_system_1": "10.00",
+                "airtime_loaded_1": "20.00",
+                "airtime_slip_2": "3.00",
+                "airtime_system_2": "4.00",
+                "airtime_loaded_2": "5.00",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
+        self.assertEqual(record.values["airtime_shift_nr"], "SHIFT-1")
+        self.assertEqual(record.values["airtime_shift_nr_2"], "SHIFT-2")
+        self.assertEqual(record.values["airtime_slip_1"], "12.00")
+        self.assertEqual(record.values["airtime_slip_2"], "3.00")
+        self.assertEqual(record.values["airtime_balance_1"], "50.00")
+        self.assertEqual(record.values["airtime_balance_2"], "52.00")
+        self.assertEqual(record.values["airtime_balance"], "52.00")
+
+        response = self.client.get(self.cash_up_url("airtime"), self.cash_up_query())
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'name="airtime_shift_nr"')
+        self.assertContains(response, 'name="airtime_shift_nr_2"')
+        self.assertContains(response, 'name="airtime_slip_2"')
+        self.assertEqual(response.content.decode().count("data-airtime-difference"), 2)
+        self.assertContains(response, "2.00")
+        self.assertContains(response, "-1.00")
+
+        response = self.client.post(
+            f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                "airtime_count": "2",
+                "airtime_shift_nr": "SHIFT-1",
+                "airtime_shift_nr_2": "SHIFT-2",
+                "airtime_balance_1": "50.00",
+                "airtime_slip_1": "12.00",
+                "airtime_system_1": "10.00",
+                "airtime_loaded_1": "20.00",
+                "airtime_slip_2": "3.00",
+                "airtime_system_2": "4.00",
+                "airtime_loaded_2": "5.00",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        record.refresh_from_db()
+        self.assertEqual(record.values["airtime_balance"], "52.00")
 
     def test_save_and_continue_saves_current_tab_and_opens_next_tab(self):
         response = self.client.post(

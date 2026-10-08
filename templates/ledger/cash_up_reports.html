@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Cash Up Reports | {{ site.name }}{% endblock %}
+{% block content %}
+<div class="page-heading compact-heading">
+    <div>
+        <div class="eyebrow"><a href="{% url 'site-dashboard' site.slug %}?date={{ reference_date|date:'Y-m-d' }}">{{ site.name }}</a> / CASH UP REPORTS</div>
+        <h1>Cash Up Reports</h1>
+    </div>
+    <a class="button secondary" href="{% url 'site-dashboard' site.slug %}?date={{ reference_date|date:'Y-m-d' }}">Return to site</a>
+</div>
+<section class="form-section cash-up-report-filter-section">
+    <form class="cash-up-report-filters" method="get">
+        <div class="report-filter-field">
+            <label for="report-period">Period</label>
+            <select id="report-period" name="period">
+                <option value="day" {% if period == "day" %}selected{% endif %}>Day</option>
+                <option value="week" {% if period == "week" %}selected{% endif %}>Week</option>
+                <option value="month" {% if period == "month" %}selected{% endif %}>Month</option>
+                <option value="year" {% if period == "year" %}selected{% endif %}>Year</option>
+                <option value="manual" {% if period == "manual" %}selected{% endif %}>Manual date range</option>
+            </select>
+        </div>
+        <div class="report-filter-field">
+            <label for="report-date">Reference date</label>
+            <input id="report-date" name="date" type="date" value="{{ reference_date|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}">
+        </div>
+        <div class="report-filter-field">
+            <label for="report-start-date">From</label>
+            <input id="report-start-date" name="start_date" type="date" value="{{ report_start|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}">
+        </div>
+        <div class="report-filter-field">
+            <label for="report-end-date">To</label>
+            <input id="report-end-date" name="end_date" type="date" value="{{ report_end|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}">
+        </div>
+        <div class="report-filter-field">
+            <label for="report-shift">Shift</label>
+            <select id="report-shift" name="shift">
+                <option value="all" {% if shift_filter == "all" %}selected{% endif %}>All shifts</option>
+                {% for name in shift_names %}<option value="{{ name }}" {% if shift_filter == name %}selected{% endif %}>{{ name }}</option>{% endfor %}
+            </select>
+        </div>
+        <button class="button primary" type="submit">Run report</button>
+    </form>
+</section>
+<div class="section-heading cash-up-report-period-heading">
+    <h2>{{ period_label }}: {{ report_start|date:"d M Y" }}{% if report_end != report_start %} to {{ report_end|date:"d M Y" }}{% endif %}</h2>
+    <span>{% if shift_filter == "all" %}All shifts{% else %}{{ shift_filter }} shift{% endif %}</span>
+</div>
+<section class="form-section cash-up-summary-section">
+    <div class="form-section-title"><span>Period Totals</span></div>
+    <div class="cash-up-summary-list">
+        {% for row in summary_rows %}
+        <div class="cash-up-summary-row {{ row.class }}"><span>{{ row.label }}</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ row.amount|floatformat:2 }}</strong></div>
+        {% endfor %}
+        <div class="cash-up-summary-row cash-up-summary-row--total"><span>Total Amount Accounted For</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_accounted_total|floatformat:2 }}</strong></div>
+        <div class="cash-up-summary-row cash-up-summary-row--sales"><span>Total Sales</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_total_sales|floatformat:2 }}</strong></div>
+        <div class="cash-up-summary-row cash-up-summary-row--difference"><span>Difference (Accounted For - Total Sales)</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_difference|floatformat:2 }}</strong></div>
+    </div>
+</section>
+<section class="cash-up-report-detail-section">
+    <div class="section-heading"><h2>Daily and Shift Breakdown</h2></div>
+    {% if report_rows %}
+    <div class="table-wrap cash-up-report-table-wrap">
+        <table class="cash-up-report-table">
+            <thead><tr>
+                <th>Date</th><th>Shift</th><th>Total Cash</th><th>Total Vouchers</th><th>Sales + Arrears</th><th>Total EFT</th><th>Total Manual</th>
+                {% if additional_enabled %}<th>Total Additional</th>{% endif %}
+                <th>Airtime Slip</th><th>Total Payouts</th><th>Amount Accounted</th><th>Total Sales</th><th>Difference</th>
+            </tr></thead>
+            <tbody>
+                {% for row in report_rows %}
+                <tr>
+                    <td>{{ row.business_date|date:"d M Y" }}</td><td>{{ row.shift }}</td>
+                    <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.cash|floatformat:2 }}</td>
+                    <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.vouchers|floatformat:2 }}</td>
+                    <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.accounts|floatformat:2 }}</td>
+                    <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.eft|floatformat:2 }}</td>
+                    <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.manual|floatformat:2 }}</td>
+                    {% if additional_enabled %}<td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.additional|floatformat:2 }}</td>{% endif %}
+                    <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.airtime_slip|floatformat:2 }}</td>
+                    <td class="cash-up-report-payout">{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.payouts|floatformat:2 }}</td>
+                    <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.accounted_total|floatformat:2 }}</td>
+                    <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.total_sales|floatformat:2 }}</td>
+                    <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.difference|floatformat:2 }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}<p class="empty-state">No cash-up records were found for this period and shift selection.</p>{% endif %}
+</section>
+{% endblock %}

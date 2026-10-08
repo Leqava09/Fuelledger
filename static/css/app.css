@@ -172,6 +172,32 @@ tbody tr:last-child td { border-bottom: 0; }
 .airtime-shift-number label { color: var(--muted); font-size: 12px; font-weight: 700; }
 .airtime-shift-number-input { width: 16ch !important; max-width: 100%; text-align: center; letter-spacing: 1px; }
 .airtime-difference { max-width: 600px; }
+.airtime-repeat-fields { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); max-width: none; align-items: start; justify-content: center; }
+.airtime-repeat-entry { position: relative; width: 100%; max-width: 600px; min-width: 0; justify-self: center; padding: 14px; border: 1px solid var(--line); border-radius: 4px; background: #fbfdfb; }
+.airtime-entry-shift input { max-width: 16ch; }
+.airtime-row-difference { width: 100%; max-width: 360px; min-height: 46px; margin-top: 0; }
+.cash-up-summary-list { display: grid; gap: 0; max-width: 760px; }
+.cash-up-summary-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 48px; padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--ink); }
+.cash-up-summary-row > span { font-size: 13px; font-weight: 650; }
+.cash-up-summary-row > strong { display: inline-flex; align-items: center; gap: 10px; font-size: 15px; font-variant-numeric: tabular-nums; }
+.cash-up-summary-row .currency-prefix { min-height: 30px; }
+.cash-up-summary-row--payouts { margin-top: 4px; border: 1px solid #e9b09d; color: #873b28; background: #fff4ee; }
+.cash-up-summary-row--total { margin-top: 12px; border-top: 2px solid var(--teal); border-bottom: 2px solid var(--teal); background: #edf7f2; }
+.cash-up-summary-row--sales { font-weight: 700; }
+.cash-up-summary-row--difference { margin-top: 8px; border-left: 3px solid var(--coral); background: #fff8ef; }
+.cash-up-report-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr)); align-items: end; gap: 12px; }
+.report-filter-field { display: grid; gap: 6px; min-width: 0; }
+.report-filter-field label { color: #405555; font-size: 12px; font-weight: 700; }
+.report-filter-field input, .report-filter-field select { width: 100%; min-height: 39px; padding: 8px 10px; border: 1px solid #cbd8d3; border-radius: 3px; color: var(--ink); background: white; font: 14px "Aptos", "Segoe UI", sans-serif; }
+.cash-up-report-filters > button { justify-self: start; }
+.cash-up-report-period-heading { margin-top: 24px; }
+.cash-up-report-detail-section { margin-top: 28px; }
+.cash-up-report-table th:nth-child(n+3), .cash-up-report-table td:nth-child(n+3) { text-align: right; }
+.cash-up-report-table td:first-child, .cash-up-report-table td:nth-child(2) { text-align: left; }
+.cash-up-report-payout { color: #873b28; background: #fff4ee; font-weight: 700; }
+.remove-repeat-row { position: absolute; top: 7px; right: 7px; width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid #e7b4a4; border-radius: 50%; color: #8b3a26; background: #fff5f0; cursor: pointer; font: 600 20px/1 "Aptos", "Segoe UI", sans-serif; }
+.remove-repeat-row:hover { background: #ffe4d9; }
+.remove-repeat-row:disabled { visibility: hidden; pointer-events: none; }
 .cash-up-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
 .cash-up-actions--top { margin: 12px 0 18px; }
 .cash-up-actions--bottom { margin-top: 20px; }

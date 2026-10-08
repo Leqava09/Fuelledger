@@ -14,6 +14,7 @@
     </div>
     <div class="site-dashboard-actions">
         <a class="button secondary" href="{% url 'site-history' site.slug %}">History</a>
+        {% if cash_up_tabs %}<a class="button primary" href="{% url 'cash-up-reports' site.slug %}?date={{ selected_date|date:'Y-m-d' }}">Cash Up Reports</a>{% endif %}
         {% if can_manage_users %}<a class="button secondary" href="{% url 'site-users' site.slug %}">Users and groups</a>{% endif %}
     </div>
 </header>
