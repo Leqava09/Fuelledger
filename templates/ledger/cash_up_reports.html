@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}Cash Up Reports | {{ site.name }}{% endblock %}
 {% block content %}
 <div class="page-heading compact-heading">
@@ -21,16 +22,12 @@
             </select>
         </div>
         <div class="report-filter-field">
-            <label for="report-date">Reference date</label>
-            <input id="report-date" name="date" type="date" value="{{ reference_date|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}">
-        </div>
-        <div class="report-filter-field">
             <label for="report-start-date">From</label>
-            <input id="report-start-date" name="start_date" type="date" value="{{ report_start|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}">
+            <input id="report-start-date" name="from_date" type="date" value="{{ from_date|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}">
         </div>
         <div class="report-filter-field">
             <label for="report-end-date">To</label>
-            <input id="report-end-date" name="end_date" type="date" value="{{ report_end|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}">
+            <input id="report-end-date" name="to_date" type="date" value="{{ to_date|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}"{% if period != "manual" %} readonly{% endif %}>
         </div>
         <div class="report-filter-field">
             <label for="report-shift">Shift</label>
@@ -90,3 +87,4 @@
     {% else %}<p class="empty-state">No cash-up records were found for this period and shift selection.</p>{% endif %}
 </section>
 {% endblock %}
+{% block extra_js %}<script src="{% static 'js/report_date_range.js' %}" defer></script>{% endblock %}

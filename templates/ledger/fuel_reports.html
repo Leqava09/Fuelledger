@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Fuel Reports | {{ site.name }}{% endblock %}
+{% block content %}
+<div class="page-heading compact-heading">
+    <div>
+        <div class="eyebrow"><a href="{% url 'site-dashboard' site.slug %}?date={{ from_date|date:'Y-m-d' }}">{{ site.name }}</a> / FUEL REPORTS</div>
+        <h1>Fuel Reports</h1>
+    </div>
+    <a class="button secondary" href="{% url 'site-dashboard' site.slug %}?date={{ from_date|date:'Y-m-d' }}">Return to site</a>
+</div>
+<section class="form-section cash-up-report-filter-section">
+    <form class="cash-up-report-filters" method="get">
+        <div class="report-filter-field">
+            <label for="report-period">Period</label>
+            <select id="report-period" name="period">
+                <option value="day" {% if period == "day" %}selected{% endif %}>Day</option>
+                <option value="week" {% if period == "week" %}selected{% endif %}>Week</option>
+                <option value="month" {% if period == "month" %}selected{% endif %}>Month</option>
+                <option value="year" {% if period == "year" %}selected{% endif %}>Year</option>
+                <option value="manual" {% if period == "manual" %}selected{% endif %}>Manual date range</option>
+            </select>
+        </div>
+        <div class="report-filter-field">
+            <label for="report-start-date">From</label>
+            <input id="report-start-date" name="from_date" type="date" value="{{ from_date|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}">
+        </div>
+        <div class="report-filter-field">
+            <label for="report-end-date">To</label>
+            <input id="report-end-date" name="to_date" type="date" value="{{ to_date|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}"{% if period != "manual" %} readonly{% endif %}>
+        </div>
+        <div class="report-filter-field">
+            <label for="report-shift">Shift</label>
+            <select id="report-shift" name="shift">
+                <option value="all" {% if shift_filter == "all" %}selected{% endif %}>All shifts</option>
+                {% for name in shift_names %}<option value="{{ name }}" {% if shift_filter == name %}selected{% endif %}>{{ name }}</option>{% endfor %}
+            </select>
+        </div>
+        <button class="button primary" type="submit">Run report</button>
+    </form>
+</section>
+<div class="section-heading cash-up-report-period-heading">
+    <h2>{{ period_label }}: {{ report_start|date:"d M Y" }}{% if report_end != report_start %} to {{ report_end|date:"d M Y" }}{% endif %}</h2>
+    <span>{% if shift_filter == "all" %}All shifts{% else %}{{ shift_filter }} shift{% endif %}</span>
+</div>
+<section class="cash-up-report-detail-section">
+    <div class="section-heading"><h2>Product Reconciliation (L)</h2></div>
+    {% if product_rows %}
+    <div class="table-wrap fuel-report-table-wrap">
+        <table class="fuel-report-table">
+            <thead><tr><th>Product</th><th>Tank decrease</th><th>Fuel Sales</th><th>Tank - Sales</th><th>Mechanical</th><th>Electronic</th><th>Mechanical - Sales</th><th>Electronic - Sales</th><th>Mechanical - Electronic</th><th>Tank - Mechanical</th><th>Tank - Electronic</th></tr></thead>
+            <tbody>
+                {% for row in product_rows %}
+                <tr>
+                    <td>{{ row.product }}</td>
+                    <td>{{ row.tank_decrease|floatformat:2 }}</td><td>{{ row.fuel_sales|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.tank_vs_sales|floatformat:2 }}</td>
+                    <td>{{ row.mechanical|floatformat:2 }}</td><td>{{ row.electronic|floatformat:2 }}</td>
+                    <td class="fuel-report-difference">{{ row.mechanical_vs_sales|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.electronic_vs_sales|floatformat:2 }}</td>
+                    <td class="fuel-report-difference">{{ row.mechanical_vs_electronic|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.tank_vs_mechanical|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.tank_vs_electronic|floatformat:2 }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}<p class="empty-state">No fuel readings were found for this period and shift selection.</p>{% endif %}
+</section>
+<section class="cash-up-report-detail-section">
+    <div class="section-heading"><h2>Date and Shift Breakdown</h2></div>
+    {% if detail_rows %}
+    <div class="table-wrap fuel-report-table-wrap">
+        <table class="fuel-report-table">
+            <thead><tr><th>Date</th><th>Shift</th><th>Product</th><th>Tank decrease</th><th>Fuel Sales</th><th>Tank - Sales</th><th>Mechanical</th><th>Electronic</th><th>Mechanical - Sales</th><th>Electronic - Sales</th><th>Mechanical - Electronic</th><th>Tank - Mechanical</th><th>Tank - Electronic</th></tr></thead>
+            <tbody>
+                {% for row in detail_rows %}
+                <tr>
+                    <td>{{ row.business_date|date:"d M Y" }}</td><td>{{ row.shift }}</td><td>{{ row.product }}</td>
+                    <td>{{ row.tank_decrease|floatformat:2 }}</td><td>{{ row.fuel_sales|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.tank_vs_sales|floatformat:2 }}</td>
+                    <td>{{ row.mechanical|floatformat:2 }}</td><td>{{ row.electronic|floatformat:2 }}</td>
+                    <td class="fuel-report-difference">{{ row.mechanical_vs_sales|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.electronic_vs_sales|floatformat:2 }}</td>
+                    <td class="fuel-report-difference">{{ row.mechanical_vs_electronic|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.tank_vs_mechanical|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.tank_vs_electronic|floatformat:2 }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}<p class="empty-state">No fuel readings were found for this period and shift selection.</p>{% endif %}
+</section>
+{% endblock %}
+{% block extra_js %}<script src="{% static 'js/report_date_range.js' %}" defer></script>{% endblock %}

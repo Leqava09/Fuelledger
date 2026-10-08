@@ -436,35 +436,8 @@ def cash_up_reports(request, slug):
 	if not _can_access_site_form(request.user, site, "cash-up"):
 		return HttpResponseForbidden("Your account cannot access cash-up reports at this site.")
 	today = timezone.localdate()
-	period = request.GET.get("period", "day")
-	if period not in {"day", "week", "month", "year", "manual"}:
-		period = "day"
-	try:
-		reference_date = min(date.fromisoformat(request.GET.get("date", "")), today)
-	except (TypeError, ValueError):
-		reference_date = today
-	if period == "week":
-		report_start = reference_date - timedelta(days=reference_date.weekday())
-		report_end = report_start + timedelta(days=6)
-	elif period == "month":
-		report_start = reference_date.replace(day=1)
-		report_end = reference_date.replace(day=calendar.monthrange(reference_date.year, reference_date.month)[1])
-	elif period == "year":
-		report_start = date(reference_date.year, 1, 1)
-		report_end = date(reference_date.year, 12, 31)
-	elif period == "manual":
-		try:
-			report_start = min(date.fromisoformat(request.GET.get("start_date", "")), today)
-		except (TypeError, ValueError):
-			report_start = reference_date
-		try:
-			report_end = min(date.fromisoformat(request.GET.get("end_date", "")), today)
-		except (TypeError, ValueError):
-			report_end = reference_date
-		if report_end < report_start:
-			report_start, report_end = report_end, report_start
-	else:
-		report_start = report_end = reference_date
+	period, from_date, to_date, report_start, report_end = _report_date_range(request.GET, today)
+	reference_date = from_date
 
 	shift_names = site.get_shift_names()
 	shift_filter = request.GET.get("shift", "all")
@@ -509,6 +482,8 @@ def cash_up_reports(request, slug):
 		"period": period,
 		"period_label": period_labels[period],
 		"reference_date": reference_date,
+		"from_date": from_date,
+		"to_date": to_date,
 		"report_start": report_start,
 		"report_end": report_end,
 		"today": today,
@@ -521,6 +496,204 @@ def cash_up_reports(request, slug):
 		"summary_difference": aggregate_accounted - aggregate_sales,
 		"report_rows": report_rows,
 	})
+
+
+@login_required
+def fuel_reports(request, slug):
+	site = request.current_site
+	if not _can_access_site_form(request.user, site, "daily-fuel-readings"):
+		return HttpResponseForbidden("Your account cannot access fuel reports at this site.")
+	today = timezone.localdate()
+	period, from_date, to_date, report_start, report_end = _report_date_range(request.GET, today)
+	shift_names = site.get_shift_names()
+	shift_filter = request.GET.get("shift", "all")
+	if shift_filter not in shift_names:
+		shift_filter = "all"
+	selected_shifts = set(shift_names if shift_filter == "all" else [shift_filter])
+	shift_order = {name: index for index, name in enumerate(shift_names)}
+	readings = list(
+		DailyFuelReading.objects.filter(
+			site=site,
+			business_date__gte=report_start - timedelta(days=365),
+			business_date__lte=report_end,
+		).prefetch_related("tank_readings__tank", "nozzle_readings__nozzle__tank")
+	)
+	readings.sort(key=lambda row: (row.business_date, shift_order.get(row.shift_label, -1)))
+	last_tank_dips = {}
+	last_nozzle_readings = {}
+	product_labels = {}
+	period_products = {}
+	detail_rows = []
+
+	def product_key(name):
+		return name.strip().casefold()
+
+	def fresh_product(name):
+		return {
+			"product": name,
+			"tank_decrease": Decimal("0"),
+			"fuel_sales": Decimal("0"),
+			"mechanical": Decimal("0"),
+			"electronic": Decimal("0"),
+			"has_tank": False,
+			"has_sales": False,
+			"has_mechanical": False,
+			"has_electronic": False,
+		}
+
+	for reading in readings:
+		in_period = report_start <= reading.business_date <= report_end and reading.shift_label in selected_shifts
+		current_products = {}
+
+		def current_product(name):
+			key = product_key(name)
+			product_labels.setdefault(key, name.strip())
+			return current_products.setdefault(key, fresh_product(product_labels[key]))
+
+		for tank_reading in reading.tank_readings.select_related("tank"):
+			key = product_key(tank_reading.tank.product)
+			previous = last_tank_dips.get(tank_reading.tank_id)
+			if in_period:
+				product = current_product(tank_reading.tank.product)
+				if previous is not None and previous[0] == key:
+					product["tank_decrease"] += previous[1] - tank_reading.dip_litres
+					product["has_tank"] = True
+			last_tank_dips[tank_reading.tank_id] = (key, tank_reading.dip_litres)
+
+		if in_period:
+			for product_name, litres in (reading.fuel_sales or {}).items():
+				product = current_product(product_name)
+				product["fuel_sales"] += Decimal(str(litres or 0))
+				product["has_sales"] = True
+
+		for nozzle_reading in reading.nozzle_readings.select_related("nozzle__tank"):
+			product_name = nozzle_reading.nozzle.tank.product
+			key = product_key(product_name)
+			previous = last_nozzle_readings.get(nozzle_reading.nozzle_id, {})
+			if in_period:
+				product = current_product(product_name)
+				for reading_field, total_field, has_field in (
+					("mechanical_reading", "mechanical", "has_mechanical"),
+					("electronic_reading", "electronic", "has_electronic"),
+				):
+					current_value = getattr(nozzle_reading, reading_field)
+					previous_value = previous.get(reading_field)
+					if current_value is not None and previous_value is not None and previous.get("product") == key:
+						product[total_field] += current_value - previous_value
+						product[has_field] = True
+			for reading_field in ("mechanical_reading", "electronic_reading"):
+				current_value = getattr(nozzle_reading, reading_field)
+				if current_value is not None:
+					previous[reading_field] = current_value
+			previous["product"] = key
+			last_nozzle_readings[nozzle_reading.nozzle_id] = previous
+
+		if not in_period:
+			continue
+		for key, product in current_products.items():
+			if key not in period_products:
+				period_products[key] = fresh_product(product["product"])
+			period_product = period_products[key]
+			for metric in ("tank_decrease", "fuel_sales", "mechanical", "electronic"):
+				has_flag = {
+					"tank_decrease": "has_tank",
+					"fuel_sales": "has_sales",
+					"mechanical": "has_mechanical",
+					"electronic": "has_electronic",
+				}[metric]
+				has_metric = product[has_flag]
+				if has_metric:
+					period_product[metric] += product[metric]
+					period_product[has_flag] = True
+			row = _fuel_report_display_row(product)
+			row.update({"business_date": reading.business_date, "shift": reading.shift_label})
+			detail_rows.append(row)
+
+	product_rows = []
+	for product in sorted(period_products.values(), key=lambda row: row["product"].casefold()):
+		product_rows.append(_fuel_report_display_row(product))
+	period_labels = {"day": "Day", "week": "Week", "month": "Month", "year": "Year", "manual": "Manual date range"}
+	return render(request, "ledger/fuel_reports.html", {
+		"site": site,
+		"period": period,
+		"period_label": period_labels[period],
+		"from_date": from_date,
+		"to_date": to_date,
+		"report_start": report_start,
+		"report_end": report_end,
+		"today": today,
+		"shift_names": shift_names,
+		"shift_filter": shift_filter,
+		"product_rows": product_rows,
+		"detail_rows": detail_rows,
+	})
+
+
+def _fuel_report_display_row(values):
+	tank = values["tank_decrease"] if values["has_tank"] else None
+	sales = values["fuel_sales"] if values["has_sales"] else None
+	mechanical = values["mechanical"] if values["has_mechanical"] else None
+	electronic = values["electronic"] if values["has_electronic"] else None
+	display_values = {
+		key: value
+		for key, value in values.items()
+		if key not in {"has_tank", "has_sales", "has_mechanical", "has_electronic"}
+	}
+	display_values.update({
+		"tank_decrease": tank,
+		"fuel_sales": sales,
+		"mechanical": mechanical,
+		"electronic": electronic,
+		"tank_vs_sales": tank - sales if tank is not None and sales is not None else None,
+		"mechanical_vs_sales": mechanical - sales if mechanical is not None and sales is not None else None,
+		"electronic_vs_sales": electronic - sales if electronic is not None and sales is not None else None,
+		"mechanical_vs_electronic": mechanical - electronic if mechanical is not None and electronic is not None else None,
+		"tank_vs_mechanical": tank - mechanical if tank is not None and mechanical is not None else None,
+		"tank_vs_electronic": tank - electronic if tank is not None and electronic is not None else None,
+	})
+	return display_values
+
+
+def _report_date_range(query, today):
+	period = query.get("period", "day")
+	if period not in {"day", "week", "month", "year", "manual"}:
+		period = "day"
+	try:
+		anchor_date = min(date.fromisoformat(query.get("from_date") or query.get("date", "")), today)
+	except (TypeError, ValueError):
+		try:
+			anchor_date = min(date.fromisoformat(query.get("start_date", "")), today)
+		except (TypeError, ValueError):
+			anchor_date = today
+	if period == "manual":
+		from_date = anchor_date
+		try:
+			to_date = min(date.fromisoformat(query.get("to_date") or query.get("end_date", "")), today)
+		except (TypeError, ValueError):
+			to_date = from_date
+		if to_date < from_date:
+			from_date, to_date = to_date, from_date
+	else:
+		from_date = anchor_date
+		if period == "week":
+			to_date = anchor_date - timedelta(days=7)
+		elif period == "month":
+			previous_month = anchor_date.month - 1 or 12
+			previous_year = anchor_date.year - (1 if anchor_date.month == 1 else 0)
+			to_date = anchor_date.replace(
+				year=previous_year,
+				month=previous_month,
+				day=min(anchor_date.day, calendar.monthrange(previous_year, previous_month)[1]),
+			)
+		elif period == "year":
+			previous_year = anchor_date.year - 1
+			to_date = anchor_date.replace(
+				year=previous_year,
+				day=min(anchor_date.day, calendar.monthrange(previous_year, anchor_date.month)[1]),
+			)
+		else:
+			to_date = anchor_date
+	return period, from_date, to_date, min(from_date, to_date), max(from_date, to_date)
 
 
 def _cash_up_entry(request, selected_date, shift_label, section):

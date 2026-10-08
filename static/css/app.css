@@ -206,6 +206,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .cash-up-report-table th:nth-child(n+3), .cash-up-report-table td:nth-child(n+3) { text-align: right; }
 .cash-up-report-table td:first-child, .cash-up-report-table td:nth-child(2) { text-align: left; }
 .cash-up-report-payout { color: #873b28; background: #fff4ee; font-weight: 700; }
+.fuel-report-table th, .fuel-report-table td { text-align: right; }
+.fuel-report-table th:first-child, .fuel-report-table td:first-child, .fuel-report-table th:nth-child(2), .fuel-report-table td:nth-child(2), .fuel-report-table th:nth-child(3), .fuel-report-table td:nth-child(3) { text-align: left; }
+.fuel-report-difference { background: #f5eef9; font-variant-numeric: tabular-nums; }
 .remove-repeat-row { position: absolute; top: 7px; right: 7px; width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid #e7b4a4; border-radius: 50%; color: #8b3a26; background: #fff5f0; cursor: pointer; font: 600 20px/1 "Aptos", "Segoe UI", sans-serif; }
 .remove-repeat-row:hover { background: #ffe4d9; }
 .remove-repeat-row:disabled { visibility: hidden; pointer-events: none; }

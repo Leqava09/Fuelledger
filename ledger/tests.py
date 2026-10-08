@@ -1021,6 +1021,9 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertEqual(dashboard.status_code, 200)
         for reading_type in ("tank-reading", "fuel-sales", "mechanical-readings", "electronic-readings"):
             self.assertContains(dashboard, reverse("fuel-reading-entry", args=[self.site.slug, reading_type]))
+        fuel_reports_path = reverse("fuel-reports", args=[self.site.slug])
+        self.assertContains(dashboard, fuel_reports_path)
+        self.assertEqual(dashboard.content.decode().count(fuel_reports_path), 1)
         self.assertEqual(
             self.client.get(reverse("fuel-reading-entry", args=[self.site.slug, "tank-reading"]), {
                 "date": self.business_date.isoformat(),
@@ -1222,6 +1225,64 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertContains(electronic_page, 'value="900.00"')
         self.assertContains(electronic_page, 'value="-200.00" readonly class="reading-difference-field"')
 
+    def test_fuel_reports_reconcile_tank_sales_and_nozzle_deltas_by_product_and_shift(self):
+        self.site.shift_count = 2
+        self.site.save(update_fields=["shift_count"])
+        previous_date = self.business_date - timedelta(days=1)
+        duplicate_diesel_tank = Tank.objects.create(site=self.site, name="Tank 3", product="Diesel")
+        duplicate_diesel_nozzle = Nozzle.objects.create(tank=duplicate_diesel_tank, name="Nozzle 3")
+
+        def save_reading(business_date, shift_label, tank_dips, nozzle_values, fuel_sales):
+            reading = DailyFuelReading.objects.create(
+                site=self.site,
+                business_date=business_date,
+                shift_label=shift_label,
+                created_by=self.user,
+                updated_by=self.user,
+                fuel_sales=fuel_sales,
+            )
+            for tank, dip in zip((self.tank, self.tank_two, duplicate_diesel_tank), tank_dips):
+                TankDipReading.objects.create(daily_reading=reading, tank=tank, dip_litres=dip)
+            for nozzle, values in zip((self.nozzle, self.nozzle_two, duplicate_diesel_nozzle), nozzle_values):
+                NozzleFuelReading.objects.create(
+                    daily_reading=reading,
+                    nozzle=nozzle,
+                    mechanical_reading=values[0],
+                    electronic_reading=values[1],
+                )
+
+        save_reading(previous_date, "Night", ("1000.00", "2000.00", "5000.00"), (("1000.00", "900.00"), ("2000.00", "1900.00"), ("5000.00", "4500.00")), {})
+        save_reading(self.business_date, "Day", ("950.00", "1950.00", "4950.00"), (("1050.00", "950.00"), ("2050.00", "1950.00"), ("5050.00", "4550.00")), {"Diesel": "100.00", "Petrol": "50.00"})
+        save_reading(self.business_date, "Night", ("900.00", "1900.00", "4900.00"), (("1100.00", "1000.00"), ("2100.00", "2000.00"), ("5100.00", "4600.00")), {"Diesel": "100.00", "Petrol": "50.00"})
+
+        report_url = reverse("fuel-reports", args=[self.site.slug])
+        report = self.client.get(report_url, {"period": "day", "from_date": self.business_date.isoformat()})
+        self.assertEqual(report.status_code, 200)
+        self.assertContains(report, 'name="from_date"')
+        self.assertContains(report, 'name="to_date"')
+        self.assertNotContains(report, "Reference date")
+        self.assertEqual(report.context["report_start"], self.business_date)
+        self.assertEqual(report.context["report_end"], self.business_date)
+        self.assertEqual(len(report.context["product_rows"]), 2)
+        self.assertEqual(len(report.context["detail_rows"]), 4)
+        for product in report.context["product_rows"]:
+            expected_total = Decimal("200.00") if product["product"] == "Diesel" else Decimal("100.00")
+            self.assertEqual(product["tank_decrease"], expected_total)
+            self.assertEqual(product["fuel_sales"], expected_total)
+            self.assertEqual(product["mechanical"], expected_total)
+            self.assertEqual(product["electronic"], expected_total)
+            for check in ("tank_vs_sales", "mechanical_vs_sales", "electronic_vs_sales", "mechanical_vs_electronic", "tank_vs_mechanical", "tank_vs_electronic"):
+                self.assertEqual(product[check], Decimal("0.00"))
+
+        night_report = self.client.get(report_url, {
+            "period": "day",
+            "from_date": self.business_date.isoformat(),
+            "shift": "Night",
+        })
+        self.assertEqual(len(night_report.context["detail_rows"]), 2)
+        self.assertEqual([row["shift"] for row in night_report.context["detail_rows"]], ["Night", "Night"])
+        self.assertTrue(all(row["tank_vs_sales"] == 0 for row in night_report.context["detail_rows"]))
+
 
 class CashUpWorkflowTests(TestCase):
     def setUp(self):
@@ -1372,6 +1433,7 @@ class CashUpWorkflowTests(TestCase):
 
     def test_cash_up_reports_roll_up_periods_and_filter_by_shift(self):
         week_start = self.business_date - timedelta(days=self.business_date.weekday())
+        anchor_date = self.business_date + timedelta(days=1)
         additional = CashUpAdditional.objects.create(site=self.site, additional_field="Till variance")
         records = (
             (week_start, "Day", {"coins": "10.00", "forecourt_total": "100.00", "airtime_slip_1": "5.00", f"additional_{additional.pk}": "2.00"}),
@@ -1388,36 +1450,46 @@ class CashUpWorkflowTests(TestCase):
             )
 
         report_url = reverse("cash-up-reports", args=[self.site.slug])
-        week_report = self.client.get(report_url, {"period": "week", "date": week_start.isoformat()})
+        week_report = self.client.get(report_url, {"period": "week", "from_date": anchor_date.isoformat()})
         self.assertEqual(week_report.status_code, 200)
-        self.assertEqual(week_report.context["report_start"], week_start)
-        self.assertEqual(week_report.context["report_end"], week_start + timedelta(days=6))
+        self.assertContains(week_report, 'name="from_date"')
+        self.assertContains(week_report, 'name="to_date"')
+        self.assertNotContains(week_report, "Reference date")
+        self.assertEqual(week_report.context["report_start"], anchor_date - timedelta(days=7))
+        self.assertEqual(week_report.context["report_end"], anchor_date)
         self.assertEqual(week_report.context["summary_accounted_total"], Decimal("72.00"))
         self.assertEqual(week_report.context["summary_total_sales"], Decimal("600.00"))
         self.assertEqual(week_report.context["summary_difference"], Decimal("-528.00"))
         self.assertEqual(len(week_report.context["report_rows"]), 3)
         self.assertEqual([row["shift"] for row in week_report.context["report_rows"]], ["Day", "Night", "Night"])
 
-        day_report = self.client.get(report_url, {"period": "week", "date": week_start.isoformat(), "shift": "Day"})
+        day_report = self.client.get(report_url, {"period": "week", "from_date": anchor_date.isoformat(), "shift": "Day"})
         self.assertEqual(day_report.context["summary_accounted_total"], Decimal("17.00"))
         self.assertEqual(day_report.context["summary_total_sales"], Decimal("100.00"))
         self.assertEqual(len(day_report.context["report_rows"]), 1)
 
         manual_report = self.client.get(report_url, {
             "period": "manual",
-            "start_date": week_start.isoformat(),
-            "end_date": week_start.isoformat(),
+            "from_date": week_start.isoformat(),
+            "to_date": week_start.isoformat(),
         })
         self.assertEqual(manual_report.context["summary_accounted_total"], Decimal("42.00"))
         self.assertEqual(manual_report.context["summary_total_sales"], Decimal("300.00"))
         self.assertEqual(len(manual_report.context["report_rows"]), 2)
+        previous_month = anchor_date.month - 1 or 12
+        previous_month_year = anchor_date.year - (1 if anchor_date.month == 1 else 0)
+        previous_month_date = date(
+            previous_month_year,
+            previous_month,
+            min(anchor_date.day, calendar.monthrange(previous_month_year, previous_month)[1]),
+        )
 
         for period, expected_start, expected_end in (
-            ("day", week_start, week_start),
-            ("month", week_start.replace(day=1), week_start.replace(day=calendar.monthrange(week_start.year, week_start.month)[1])),
-            ("year", date(week_start.year, 1, 1), date(week_start.year, 12, 31)),
+            ("day", anchor_date, anchor_date),
+            ("month", previous_month_date, anchor_date),
+            ("year", anchor_date.replace(year=anchor_date.year - 1), anchor_date),
         ):
-            response = self.client.get(report_url, {"period": period, "date": week_start.isoformat()})
+            response = self.client.get(report_url, {"period": period, "from_date": anchor_date.isoformat()})
             self.assertEqual(response.context["report_start"], expected_start)
             self.assertEqual(response.context["report_end"], expected_end)
 
