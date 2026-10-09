@@ -13,6 +13,34 @@
     <a class="button secondary" href="{% url 'admin:ledger_site_changelist' %}">Site administration</a>
 </nav>
 {% endif %}
+<section class="hq-sites-section airtime-alert-section" aria-labelledby="airtime-alert-heading">
+    <div class="hq-sites-heading">
+        <h2 id="airtime-alert-heading">Airtime number alerts</h2>
+        <span>{{ pending_airtime_alerts|length }} pending</span>
+    </div>
+    {% if pending_airtime_alerts %}
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>Site</th><th>Date</th><th>Shift</th><th>Card</th><th>Previous</th><th>Expected</th><th>Entered</th><th>Flagged by</th><th>Action</th></tr></thead>
+            <tbody>
+                {% for alert in pending_airtime_alerts %}
+                <tr>
+                    <td>{{ alert.site.name }}</td>
+                    <td>{{ alert.cash_up_record.business_date|date:"d M Y" }}</td>
+                    <td>{{ alert.cash_up_record.shift_label }}</td>
+                    <td>{{ alert.card_index }}</td>
+                    <td>{{ alert.previous_number|default:"-" }}</td>
+                    <td>{{ alert.expected_number|default:"-" }}</td>
+                    <td>{{ alert.entered_number|default:"-" }}</td>
+                    <td>{{ alert.flagged_by.get_full_name|default:alert.flagged_by.username }}</td>
+                    <td><form method="post" action="{% url 'approve-airtime-alert' alert.pk %}">{% csrf_token %}<button class="button secondary" type="submit" name="approved" value="true">Approve / Clear</button></form></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}<p class="empty-state">No Airtime number alerts need review.</p>{% endif %}
+</section>
 <section class="hq-sites-section" aria-labelledby="hq-sites-heading">
     <div class="hq-sites-heading">
         <h2 id="hq-sites-heading">Sites</h2>

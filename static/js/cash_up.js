@@ -89,7 +89,7 @@ if (cashUpForm) {
 		if (!draftScope) return;
 		const values = {};
 		Array.from(cashUpForm.elements).forEach((element) => {
-			if (!element.name || ["all_tab_values", "csrfmiddlewaretoken", "save_mode"].includes(element.name) || ["submit", "button"].includes(element.type)) return;
+			if (!element.name || ["all_tab_values", "csrfmiddlewaretoken", "save_mode", "airtime_sequence_confirmed"].includes(element.name) || ["submit", "button"].includes(element.type)) return;
 			values[element.name] = element.value;
 		});
 		tabDrafts[sectionKey] = values;
@@ -197,6 +197,10 @@ if (cashUpForm) {
 	cashUpForm.addEventListener("input", (event) => {
 		const group = event.target.dataset.cashUpTotalInput;
 		if (group) updateSectionTotal(group);
+		if (event.target.name?.startsWith("airtime_shift_nr")) {
+			const confirmation = getControl("airtime_sequence_confirmed");
+			if (confirmation) confirmation.value = "";
+		}
 		updateAirtimeDifference();
 		updateAirtimeBalance();
 		saveDraft();
@@ -206,5 +210,50 @@ if (cashUpForm) {
 		const mode = event.submitter?.value || "tab";
 		saveDraft();
 		if (mode === "exit" && draftInput) draftInput.value = JSON.stringify(tabDrafts);
+		if (sectionKey !== "airtime" && mode !== "exit") return;
+		let airtimeValues = {};
+		if (sectionKey === "airtime") {
+			cashUpForm.querySelectorAll('input[name="airtime_shift_nr"], input[name^="airtime_shift_nr_"]').forEach((input) => {
+				airtimeValues[input.name] = input.value;
+			});
+		} else {
+			try {
+				airtimeValues = JSON.parse(draftInput?.value || "{}").airtime || {};
+			} catch {
+				airtimeValues = {};
+			}
+		}
+		const numberEntries = Object.entries(airtimeValues)
+			.map(([name, value]) => {
+				if (name === "airtime_shift_nr") return [1, String(value || "").trim()];
+				const match = name.match(/^airtime_shift_nr_(\d+)$/);
+				return match ? [Number.parseInt(match[1], 10), String(value || "").trim()] : null;
+			})
+			.filter(Boolean)
+			.sort((left, right) => left[0] - right[0]);
+		let previous = Number.parseInt(cashUpForm.dataset.airtimePreviousShiftNumber, 10);
+		let warning = "";
+		for (const [cardIndex, entered] of numberEntries) {
+			if (!entered) continue;
+			if (Number.isFinite(previous) && (!/^\d+$/.test(entered) || Number.parseInt(entered, 10) !== previous + 1)) {
+				const expected = previous + 1;
+				warning += `\nCard ${cardIndex}: expected ${expected} after ${previous}, but ${entered} was entered.`;
+			}
+			previous = /^\d+$/.test(entered) ? Number.parseInt(entered, 10) : Number.NaN;
+		}
+		if (!warning) return;
+		const confirmed = cashUpForm.elements.namedItem("airtime_sequence_confirmed");
+		if (confirmed?.value === "1") return;
+		if (!window.confirm(`Airtime Shift Numbers do not follow the previous sequence.${warning}\n\nAre you sure you want to save? This will send a flag to Head Office for review.`)) {
+			event.preventDefault();
+			return;
+		}
+		if (confirmed) confirmed.value = "1";
+	});
+	cashUpForm.addEventListener("input", (event) => {
+		if (event.target.name?.startsWith("airtime_shift_nr")) {
+			const confirmed = cashUpForm.elements.namedItem("airtime_sequence_confirmed");
+			if (confirmed) confirmed.value = "";
+		}
 	});
 }

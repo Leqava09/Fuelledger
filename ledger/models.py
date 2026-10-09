@@ -333,6 +333,35 @@ class CashUpShiftRecord(models.Model):
 		return f"{self.site} / {self.business_date} / {self.shift_label}"
 
 
+class AirtimeSequenceAlert(models.Model):
+	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="airtime_sequence_alerts")
+	cash_up_record = models.ForeignKey(CashUpShiftRecord, on_delete=models.CASCADE, related_name="airtime_sequence_alerts")
+	card_index = models.PositiveSmallIntegerField()
+	previous_number = models.CharField(max_length=10, blank=True)
+	expected_number = models.CharField(max_length=10, blank=True)
+	entered_number = models.CharField(max_length=10, blank=True)
+	flagged_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="airtime_sequence_alerts_flagged")
+	approved = models.BooleanField(default=False)
+	approved_by = models.ForeignKey(
+		settings.AUTH_USER_MODEL,
+		null=True,
+		blank=True,
+		on_delete=models.SET_NULL,
+		related_name="airtime_sequence_alerts_approved",
+	)
+	created_at = models.DateTimeField(auto_now_add=True)
+	approved_at = models.DateTimeField(null=True, blank=True)
+
+	class Meta:
+		ordering = ["-created_at"]
+		constraints = [
+			models.UniqueConstraint(fields=["cash_up_record", "card_index"], name="unique_airtime_sequence_alert_per_card"),
+		]
+
+	def __str__(self):
+		return f"{self.site} / {self.cash_up_record.business_date} / {self.cash_up_record.shift_label} / Airtime {self.card_index}"
+
+
 class DailyFuelReading(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="daily_fuel_readings")
 	business_date = models.DateField()

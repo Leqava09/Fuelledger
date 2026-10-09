@@ -1,5 +1,6 @@
 import json
 import calendar
+import re
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -15,6 +16,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.contrib.auth.models import User
 
+from django.views.decorators.http import require_POST
 from .forms import (
 	BookInFuelForm,
 	CashUpEntryForm,
@@ -29,6 +31,7 @@ from .forms import (
 	SiteUserCreateForm,
 )
 from .models import (
+	AirtimeSequenceAlert,
 	CashUpAdditional,
 	CashUpShiftRecord,
 	DailyFuelReading,
@@ -237,7 +240,28 @@ def hq_dashboard(request):
 	if not request.user.is_superuser and (not _profile(request.user) or _profile(request.user).role != "HQ"):
 		return HttpResponseForbidden("HQ access is restricted to HQ users.")
 	sites = Site.objects.filter(is_active=True).order_by("name")
-	return render(request, "ledger/hq_dashboard.html", {"sites": sites})
+	pending_airtime_alerts = AirtimeSequenceAlert.objects.filter(approved=False).select_related(
+		"site", "cash_up_record", "flagged_by",
+	).order_by("-created_at")
+	return render(request, "ledger/hq_dashboard.html", {
+		"sites": sites,
+		"pending_airtime_alerts": pending_airtime_alerts,
+	})
+
+
+@login_required
+@require_POST
+def approve_airtime_sequence_alert(request, alert_id):
+	profile = _profile(request.user)
+	if not request.user.is_superuser and (not profile or profile.role != UserProfile.Role.HQ):
+		return HttpResponseForbidden("Only HQ users can approve Airtime sequence alerts.")
+	alert = get_object_or_404(AirtimeSequenceAlert, pk=alert_id, approved=False)
+	alert.approved = True
+	alert.approved_by = request.user
+	alert.approved_at = timezone.now()
+	alert.save(update_fields=["approved", "approved_by", "approved_at"])
+	messages.success(request, "Airtime sequence flag approved and cleared.")
+	return redirect("hq-dashboard")
 
 
 @login_required
@@ -875,6 +899,7 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 	site = request.current_site
 	record = CashUpShiftRecord.objects.filter(site=site, business_date=selected_date, shift_label=shift_label).first()
 	initial_values = record.values if record else {}
+	previous_airtime_shift_number = _previous_airtime_shift_number(site, selected_date, shift_label)
 	previous_airtime_balance = _previous_airtime_balance(site, selected_date, shift_label) if section == "airtime" else None
 	airtime_first_card_editable = section == "airtime" and _is_first_airtime_card(site, selected_date, shift_label)
 	has_first_card_activity = any(
@@ -901,6 +926,8 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 	)
 	if request.method == "POST":
 		save_mode = request.POST.get("save_mode", "tab")
+		airtime_sequence_issues = []
+		sequence_confirmed = request.POST.get("airtime_sequence_confirmed") == "1"
 		if save_mode == "exit":
 			try:
 				all_tab_values = json.loads(request.POST.get("all_tab_values") or "{}")
@@ -937,13 +964,24 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 					continue
 				previous_tab_airtime_balance = _previous_airtime_balance(site, selected_date, shift_label) if tab_key == "airtime" else None
 				updated_values = _apply_cash_up_form_values(updated_values, tab_form, previous_airtime_balance=previous_tab_airtime_balance)
+				if tab_key == "airtime":
+					airtime_sequence_issues = _airtime_sequence_issues(updated_values, previous_airtime_shift_number)
+					if airtime_sequence_issues and not sequence_confirmed:
+						validation_errors.append("Airtime shift numbers need confirmation")
 			if validation_errors:
 				form.add_error(None, "Check the invalid entries in these sections before saving all: " + ", ".join(validation_errors))
 			else:
-				return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, "exit", section)
+				return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, "exit", section, airtime_sequence_issues)
 		elif form.is_valid():
 			updated_values = _apply_cash_up_form_values(initial_values, form, previous_airtime_balance=previous_airtime_balance)
-			return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, save_mode, section)
+			if section == "airtime":
+				airtime_sequence_issues = _airtime_sequence_issues(updated_values, previous_airtime_shift_number)
+				if airtime_sequence_issues and not sequence_confirmed:
+					form.add_error(None, "Confirm the Airtime Shift Number sequence before saving.")
+				else:
+					return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, save_mode, section, airtime_sequence_issues)
+			else:
+				return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, save_mode, section)
 	else:
 		save_mode = "tab"
 	additional_fields = list(CashUpAdditional.objects.filter(site=site))
@@ -1018,6 +1056,7 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 		"airtime_rows": airtime_rows,
 		"airtime_difference": airtime_difference,
 		"previous_airtime_balance": previous_airtime_balance,
+		"previous_airtime_shift_number": previous_airtime_shift_number,
 		"show_total": section in {"cash", "vouchers", "sales-account", "fuel", "payouts", *total_group_prefixes},
 		"total_group": section,
 		"field_rows": [(label, form[key]) for key, label in form.entry_fields],
@@ -1107,7 +1146,8 @@ def _apply_cash_up_form_values(values, form, previous_airtime_balance=None):
 	return updated_values
 
 
-def _complete_cash_up_save(request, site, record, before, updated_values, selected_date, shift_label, save_mode, section):
+def _complete_cash_up_save(request, site, record, before, updated_values, selected_date, shift_label, save_mode, section, airtime_sequence_issues=None):
+	airtime_sequence_issues = airtime_sequence_issues or []
 	with transaction.atomic():
 		if record is None:
 			record = CashUpShiftRecord.objects.create(
@@ -1120,6 +1160,28 @@ def _complete_cash_up_save(request, site, record, before, updated_values, select
 		else:
 			record.values = updated_values
 			record.save(update_fields=["values", "updated_at"])
+		for issue in airtime_sequence_issues:
+			alert, created = AirtimeSequenceAlert.objects.get_or_create(
+				cash_up_record=record,
+				card_index=issue["card_index"],
+				defaults={
+					"site": site,
+					"previous_number": issue["previous_number"],
+					"expected_number": issue["expected_number"],
+					"entered_number": issue["entered_number"],
+					"flagged_by": request.user,
+				},
+			)
+			if not created:
+				alert.site = site
+				alert.previous_number = issue["previous_number"]
+				alert.expected_number = issue["expected_number"]
+				alert.entered_number = issue["entered_number"]
+				alert.flagged_by = request.user
+				alert.approved = False
+				alert.approved_by = None
+				alert.approved_at = None
+				alert.save(update_fields=["site", "previous_number", "expected_number", "entered_number", "flagged_by", "approved", "approved_by", "approved_at"])
 	_record_audit(
 		site,
 		request.user,
@@ -1194,6 +1256,69 @@ def _previous_airtime_balance(site, selected_date, shift_label):
 		if value is not None:
 			return value
 	return None
+
+
+def _airtime_shift_numbers(values):
+	if not isinstance(values, dict):
+		return []
+	numbers = []
+	for key, value in values.items():
+		if key == "airtime_shift_nr":
+			index = 1
+		elif key.startswith("airtime_shift_nr_") and key[len("airtime_shift_nr_"):].isdigit():
+			index = int(key[len("airtime_shift_nr_"):])
+		else:
+			continue
+		while len(numbers) < index:
+			numbers.append("")
+		numbers[index - 1] = str(value or "").strip()
+	return numbers
+
+
+def _previous_airtime_shift_number(site, selected_date, shift_label):
+	shift_names = site.get_shift_names()
+	if shift_label not in shift_names:
+		return ""
+	shift_order = {name: index for index, name in enumerate(shift_names)}
+	current_order = shift_order[shift_label]
+	candidates = CashUpShiftRecord.objects.filter(
+		site=site,
+		business_date__lte=selected_date,
+	).only("business_date", "shift_label", "values")
+	for candidate in sorted(
+		candidates,
+		key=lambda item: (item.business_date, shift_order.get(item.shift_label, -1)),
+		reverse=True,
+	):
+		if candidate.business_date == selected_date and shift_order.get(candidate.shift_label, -1) >= current_order:
+			continue
+		numbers = _airtime_shift_numbers(candidate.values)
+		for number in reversed(numbers):
+			if number:
+				return number
+	return ""
+
+
+def _airtime_sequence_issues(values, previous_number):
+	issues = []
+	previous = str(previous_number or "").strip()
+	for card_index, entered in enumerate(_airtime_shift_numbers(values), start=1):
+		if not entered:
+			continue
+		previous_match = re.fullmatch(r"(.*?)(\d+)", previous)
+		entered_match = re.fullmatch(r"(.*?)(\d+)", entered)
+		if previous_match:
+			expected_suffix = str(int(previous_match.group(2)) + 1).zfill(len(previous_match.group(2)))
+			expected = f"{previous_match.group(1)}{expected_suffix}"
+			if not entered_match or entered != expected:
+				issues.append({
+					"card_index": card_index,
+					"previous_number": previous,
+					"expected_number": expected,
+					"entered_number": entered,
+				})
+		previous = entered
+	return issues
 
 
 def _cash_up_totals(values):

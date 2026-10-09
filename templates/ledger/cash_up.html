@@ -17,10 +17,11 @@
     <button class="button secondary" type="submit" form="cash-up-entry-form" name="save_mode" value="exit">Save and Exit</button>
 </div>{% endif %}
 {% include "ledger/cash_up_tabs.html" with active_cash_up_section=section %}
-<form id="cash-up-entry-form" class="entry-form cash-up-form" method="post" data-draft-key="{{ draft_key }}" data-draft-section="{{ section }}" data-workflow-draft-key="{{ section }}" data-workflow-draft-scope="{{ draft_key }}" data-has-errors="{% if form.errors %}true{% else %}false{% endif %}"{% if section == "airtime" %} data-airtime-previous-balance="{{ previous_airtime_balance|default:'0' }}" data-airtime-first-card-editable="{% if form.airtime_first_card_editable %}true{% else %}false{% endif %}"{% endif %}>
+<form id="cash-up-entry-form" class="entry-form cash-up-form" method="post" data-draft-key="{{ draft_key }}" data-draft-section="{{ section }}" data-workflow-draft-key="{{ section }}" data-workflow-draft-scope="{{ draft_key }}" data-has-errors="{% if form.errors %}true{% else %}false{% endif %}" data-airtime-previous-shift-number="{{ previous_airtime_shift_number }}"{% if section == "airtime" %} data-airtime-previous-balance="{{ previous_airtime_balance|default:'0' }}" data-airtime-first-card-editable="{% if form.airtime_first_card_editable %}true{% else %}false{% endif %}"{% endif %}>
     {% csrf_token %}
     {{ form.business_date }}{{ form.shift_label }}
     <input type="hidden" name="all_tab_values" value="">
+    <input type="hidden" name="airtime_sequence_confirmed" value="">
     {% if form.non_field_errors %}<div class="form-error">{{ form.non_field_errors }}</div>{% endif %}
     {% if section == "summary" %}
     <section class="form-section cash-up-summary-section">

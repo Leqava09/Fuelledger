@@ -20,6 +20,7 @@ from PIL import Image
 from ledger.calculations import FormulaError, calculate_values, validate_formula
 from ledger.admin import CashUpAdditionalInline, EFTDrivewayInline, ManualShopPointInline, NozzleInlineForm, SiteAdmin, SiteAdminForm, SpeedPointInlineForm, TankInlineForm
 from ledger.models import (
+    AirtimeSequenceAlert,
     CashUpAdditional,
     CashUpField,
     CashUpShiftRecord,
@@ -1702,6 +1703,59 @@ class CashUpWorkflowTests(TestCase):
 
     def cash_up_query(self):
         return {"date": self.business_date.isoformat(), "shift": "Night"}
+
+    def test_airtime_sequence_mismatch_requires_confirmation_and_hq_clear(self):
+        url = self.cash_up_url("airtime")
+        payload = {
+            "business_date": self.business_date.isoformat(),
+            "shift_label": "Night",
+            "airtime_count": "2",
+            "airtime_shift_nr": "352",
+            "airtime_shift_nr_2": "254",
+            "airtime_slip_1": "10.00",
+            "airtime_system_1": "10.00",
+            "airtime_loaded_1": "0.00",
+            "airtime_slip_2": "10.00",
+            "airtime_system_2": "10.00",
+            "airtime_loaded_2": "0.00",
+            "save_mode": "continue",
+        }
+        response = self.client.post(f"{url}?date={self.business_date.isoformat()}&shift=Night", payload)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Confirm the Airtime Shift Number sequence before saving.")
+        self.assertFalse(CashUpShiftRecord.objects.filter(site=self.site, business_date=self.business_date, shift_label="Night").exists())
+        self.assertEqual(AirtimeSequenceAlert.objects.count(), 0)
+
+        confirmed_payload = {**payload, "airtime_sequence_confirmed": "1"}
+        confirmed = self.client.post(f"{url}?date={self.business_date.isoformat()}&shift=Night", confirmed_payload)
+        self.assertEqual(confirmed.status_code, 302)
+        alert = AirtimeSequenceAlert.objects.get(site=self.site)
+        self.assertEqual(alert.previous_number, "352")
+        self.assertEqual(alert.expected_number, "353")
+        self.assertEqual(alert.entered_number, "254")
+        self.assertFalse(alert.approved)
+
+        approve_url = reverse("approve-airtime-alert", args=[alert.pk])
+        self.assertEqual(self.client.post(approve_url).status_code, 403)
+        self.assertFalse(alert.approved)
+        self.assertEqual(self.client.get(reverse("hq-dashboard")).status_code, 403)
+
+        hq_user = User.objects.create_user(username="airtime-hq", password="test-pass-123")
+        UserProfile.objects.create(user=hq_user, role=UserProfile.Role.HQ)
+        self.client.force_login(hq_user)
+        hq_dashboard = self.client.get(reverse("hq-dashboard"))
+        self.assertContains(hq_dashboard, "Airtime number alerts")
+        self.assertContains(hq_dashboard, "352")
+        self.assertContains(hq_dashboard, "254")
+        approved = self.client.post(approve_url)
+        self.assertRedirects(approved, reverse("hq-dashboard"), fetch_redirect_response=False)
+        alert.refresh_from_db()
+        self.assertTrue(alert.approved)
+        self.assertEqual(alert.approved_by, hq_user)
+        self.assertIsNotNone(alert.approved_at)
+        cleared_dashboard = self.client.get(reverse("hq-dashboard"))
+        self.assertContains(cleared_dashboard, "0 pending")
+        self.assertNotContains(cleared_dashboard, "expected 353")
 
     def test_non_airtime_tab_skips_airtime_history_lookup(self):
         with patch("ledger.views._previous_airtime_balance") as airtime_balance_lookup:
