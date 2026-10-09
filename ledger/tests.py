@@ -1698,6 +1698,9 @@ class CashUpWorkflowTests(TestCase):
         self.assertEqual(week_report.context["summary_accounted_total"], Decimal("72.00"))
         self.assertEqual(week_report.context["summary_total_sales"], Decimal("600.00"))
         self.assertEqual(week_report.context["summary_difference"], Decimal("-528.00"))
+        self.assertContains(week_report, 'data-print-report')
+        self.assertContains(week_report, 'class="cash-up-summary-row cash-up-summary-row--difference cash-up-difference--nonzero"')
+        self.assertContains(week_report, 'class="cash-up-difference--nonzero"')
         self.assertEqual(len(week_report.context["report_rows"]), 3)
         self.assertEqual([row["shift"] for row in week_report.context["report_rows"]], ["Day", "Night", "Night"])
 
@@ -1714,6 +1717,23 @@ class CashUpWorkflowTests(TestCase):
         self.assertEqual(manual_report.context["summary_accounted_total"], Decimal("42.00"))
         self.assertEqual(manual_report.context["summary_total_sales"], Decimal("300.00"))
         self.assertEqual(len(manual_report.context["report_rows"]), 2)
+
+        zero_date = week_start - timedelta(days=1)
+        CashUpShiftRecord.objects.create(
+            site=self.site,
+            business_date=zero_date,
+            shift_label="Day",
+            created_by=self.user,
+            values={},
+        )
+        zero_report = self.client.get(report_url, {
+            "period": "manual",
+            "from_date": zero_date.isoformat(),
+            "to_date": zero_date.isoformat(),
+        })
+        self.assertEqual(zero_report.context["summary_difference"], Decimal("0"))
+        self.assertContains(zero_report, 'class="cash-up-summary-row cash-up-summary-row--difference cash-up-difference--zero"')
+        self.assertContains(zero_report, 'class="cash-up-difference--zero"')
         previous_month = anchor_date.month - 1 or 12
         previous_month_year = anchor_date.year - (1 if anchor_date.month == 1 else 0)
         previous_month_date = date(

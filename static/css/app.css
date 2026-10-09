@@ -197,7 +197,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .cash-up-summary-row--payouts { margin-top: 4px; border: 1px solid #e9b09d; color: #873b28; background: #fff4ee; }
 .cash-up-summary-row--total { margin-top: 12px; border-top: 2px solid var(--teal); border-bottom: 2px solid var(--teal); background: #edf7f2; }
 .cash-up-summary-row--sales { font-weight: 700; }
-.cash-up-summary-row--difference { margin-top: 8px; border-left: 3px solid var(--coral); background: #fff8ef; }
+.cash-up-summary-row--difference { margin-top: 8px; border-left: 3px solid var(--coral); }
+.cash-up-difference--nonzero { color: #873b28 !important; background: #fff0e9 !important; font-weight: 700; }
+.cash-up-difference--zero { color: #17664f !important; background: #e9f6ef !important; font-weight: 700; }
 .cash-up-report-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr)); align-items: end; gap: 12px; }
 .report-filter-field { display: grid; gap: 6px; min-width: 0; }
 .report-filter-field label { color: #405555; font-size: 12px; font-weight: 700; }
@@ -236,6 +238,8 @@ tbody tr:last-child td { border-bottom: 0; }
     .topbar, .page-heading .heading-actions, .cash-up-report-filter-section { display: none !important; }
     .page-shell { width: 100%; max-width: none; margin: 0; padding: 0; }
     .table-wrap, .fuel-report-table-wrap { overflow: visible !important; border: 0; }
+    .cash-up-report-table { width: 100%; table-layout: fixed; font-size: 7pt; }
+    .cash-up-report-table th, .cash-up-report-table td { padding: 4px 3px; white-space: normal; overflow-wrap: anywhere; }
     .fuel-report-table { width: 100%; font-size: 8pt; }
     .fuel-report-table th, .fuel-report-table td { padding: 4px 3px; }
     .fuel-report-variance span { font-size: 7pt; }

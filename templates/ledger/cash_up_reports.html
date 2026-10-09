@@ -7,7 +7,10 @@
         <div class="eyebrow"><a href="{% url 'site-dashboard' site.slug %}?date={{ reference_date|date:'Y-m-d' }}">{{ site.name }}</a> / CASH UP REPORTS</div>
         <h1>Cash Up Reports</h1>
     </div>
-    <a class="button secondary" href="{% url 'site-dashboard' site.slug %}?date={{ reference_date|date:'Y-m-d' }}">Return to site</a>
+    <div class="heading-actions">
+        <button class="button secondary" type="button" data-print-report>Print report</button>
+        <a class="button secondary" href="{% url 'site-dashboard' site.slug %}?date={{ reference_date|date:'Y-m-d' }}">Return to site</a>
+    </div>
 </div>
 <section class="form-section cash-up-report-filter-section">
     <form class="cash-up-report-filters" method="get">
@@ -51,7 +54,7 @@
         {% endfor %}
         <div class="cash-up-summary-row cash-up-summary-row--total"><span>Total Amount Accounted For</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_accounted_total|floatformat:2 }}</strong></div>
         <div class="cash-up-summary-row cash-up-summary-row--sales"><span>Total Sales</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_total_sales|floatformat:2 }}</strong></div>
-        <div class="cash-up-summary-row cash-up-summary-row--difference"><span>Difference (Accounted For - Total Sales)</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_difference|floatformat:2 }}</strong></div>
+        <div class="cash-up-summary-row cash-up-summary-row--difference {% if summary_difference %}cash-up-difference--nonzero{% else %}cash-up-difference--zero{% endif %}"><span>Difference (Accounted For - Total Sales)</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_difference|floatformat:2 }}</strong></div>
     </div>
 </section>
 <section class="cash-up-report-detail-section">
@@ -78,7 +81,7 @@
                     <td class="cash-up-report-payout">{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.payouts|floatformat:2 }}</td>
                     <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.accounted_total|floatformat:2 }}</td>
                     <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.total_sales|floatformat:2 }}</td>
-                    <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.difference|floatformat:2 }}</td>
+                    <td class="cash-up-difference--{% if row.difference %}nonzero{% else %}zero{% endif %}">{% if site.currency %}{{ site.currency }} {% endif %}{{ row.difference|floatformat:2 }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -87,4 +90,4 @@
     {% else %}<p class="empty-state">No cash-up records were found for this period and shift selection.</p>{% endif %}
 </section>
 {% endblock %}
-{% block extra_js %}<script src="{% static 'js/report_date_range.js' %}" defer></script>{% endblock %}
+{% block extra_js %}<script src="{% static 'js/report_date_range.js' %}" defer></script><script src="{% static 'js/print_fuel_report.js' %}" defer></script>{% endblock %}
