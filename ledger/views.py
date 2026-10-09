@@ -78,6 +78,14 @@ def _first_hq_user_setup_available():
 class FuelLedgerLoginView(LoginView):
 	template_name = "registration/login.html"
 
+	def get_success_url(self):
+		profile = _profile(self.request.user)
+		if self.request.user.is_superuser or (profile and profile.role == UserProfile.Role.HQ):
+			return reverse("hq-dashboard")
+		if profile and profile.site_id:
+			return reverse("site-dashboard", args=[profile.site.slug])
+		return reverse("home")
+
 	def get_context_data(self, **kwargs):
 		context = super().get_context_data(**kwargs)
 		context["first_hq_user_setup_available"] = _first_hq_user_setup_available()

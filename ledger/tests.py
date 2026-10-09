@@ -338,6 +338,28 @@ class SiteAccessTests(TestCase):
         self.assertEqual(self.client.get(reverse("site-dashboard", args=[self.site_two.slug])).status_code, 403)
         self.assertEqual(self.client.get(reverse("site-dashboard", args=[self.site_one.slug])).status_code, 200)
 
+    def test_site_user_login_redirects_to_assigned_site_even_with_hq_next_url(self):
+        response = self.client.post(reverse("login"), {
+            "username": "cashier",
+            "password": "test-pass-123",
+            "next": reverse("hq-dashboard"),
+        })
+
+        self.assertRedirects(
+            response,
+            reverse("site-dashboard", args=[self.site_one.slug]),
+            fetch_redirect_response=False,
+        )
+
+    def test_hq_user_login_redirects_to_hq_even_with_site_next_url(self):
+        response = self.client.post(reverse("login"), {
+            "username": "hq",
+            "password": "test-pass-123",
+            "next": reverse("site-dashboard", args=[self.site_one.slug]),
+        })
+
+        self.assertRedirects(response, reverse("hq-dashboard"), fetch_redirect_response=False)
+
     def test_site_user_cannot_open_admin_even_if_marked_staff(self):
         self.site_user.is_staff = True
         self.site_user.save(update_fields=["is_staff"])
@@ -384,7 +406,7 @@ class SiteAccessTests(TestCase):
         self.assertEqual(self.client.get(reverse("admin:ledger_site_change", args=[self.site_two.pk])).status_code, 200)
         self.assertEqual(self.client.get(reverse("admin:auth_user_changelist")).status_code, 200)
         self.assertEqual(self.client.get(reverse("admin:auth_group_changelist")).status_code, 200)
-        self.assertEqual(self.client.get(reverse("admin:ledger_site_delete", args=[self.site_two.pk])).status_code, 403)
+        self.assertEqual(self.client.get(reverse("admin:ledger_site_delete", args=[self.site_two.pk])).status_code, 200)
 
     def test_uploaded_site_picture_is_displayed_on_its_site_dashboard(self):
         image_file = BytesIO()

@@ -627,7 +627,7 @@ class SiteAdmin(nested_admin.NestedModelAdmin):
 		return self._is_hq_user(request) or super().has_change_permission(request, obj)
 
 	def has_delete_permission(self, request, obj=None):
-		return request.user.is_superuser or super().has_delete_permission(request, obj)
+		return self._is_hq_user(request) or super().has_delete_permission(request, obj)
 
 	def save_model(self, request, obj, form, change):
 		before = {}
