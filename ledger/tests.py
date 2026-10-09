@@ -1610,6 +1610,7 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertEqual(report.context["transfer_count"], 1)
         self.assertEqual(report.context["transfer_total_litres"], Decimal("50.00"))
         self.assertContains(report, "Internal tank transfers")
+        self.assertEqual(len(report.context["report_transfers"]), 1)
         self.assertContains(report, "Tank balances")
         self.assertContains(report, "Print report")
         self.assertContains(report, 'data-print-report')
@@ -1624,6 +1625,49 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertEqual(balances[self.tank.name]["balance"], Decimal("2450.00"))
         self.assertEqual(balances[self.tank.name]["business_date"], self.business_date)
         self.assertNotIn("shift", balances[self.tank.name])
+
+    def test_fuel_report_adjusts_balances_for_transfers_after_latest_dips(self):
+        latest_reading = DailyFuelReading.objects.create(
+            site=self.site,
+            business_date=self.business_date,
+            shift_label="Day",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TankDipReading.objects.create(daily_reading=latest_reading, tank=self.tank, dip_litres="1000.00")
+        TankDipReading.objects.create(daily_reading=latest_reading, tank=self.tank_two, dip_litres="500.00")
+        transfer = FuelTransfer.objects.create(
+            site=self.site,
+            from_tank=self.tank,
+            to_tank=self.tank_two,
+            business_date=self.business_date,
+            shift_label="Day",
+            amount_litres="125.50",
+            created_by=self.user,
+        )
+
+        report = self.client.get(reverse("fuel-reports", args=[self.site.slug]), {
+            "period": "day",
+            "from_date": self.business_date.isoformat(),
+            "shift": "Day",
+        })
+
+        self.assertEqual(report.status_code, 200)
+        balances = {row["tank"].pk: row["balance"] for row in report.context["tank_balances"]}
+        self.assertEqual(balances[self.tank.pk], Decimal("874.50"))
+        self.assertEqual(balances[self.tank_two.pk], Decimal("625.50"))
+        self.assertEqual(report.context["report_transfers"], [transfer])
+        report_html = report.content.decode()
+        self.assertGreater(report_html.index("Internal tank transfers"), report_html.index("By date and shift"))
+        self.assertContains(report, "125.50")
+
+        other_shift_report = self.client.get(reverse("fuel-reports", args=[self.site.slug]), {
+            "period": "day",
+            "from_date": self.business_date.isoformat(),
+            "shift": "Night",
+        })
+        self.assertContains(other_shift_report, "Internal tank transfers")
+        self.assertContains(other_shift_report, "No internal tank transfers were recorded in the selected period and shift.")
 
     def test_fuel_reports_reconcile_tank_sales_and_nozzle_deltas_by_product_and_shift(self):
         self.site.shift_count = 2

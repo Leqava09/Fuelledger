@@ -69,7 +69,6 @@
     {% else %}<p class="empty-state">No tanks are configured for this site.</p>{% endif %}
 </section>
 {% endif %}
-{% if transfer_count %}<p class="fuel-report-note"><strong>Internal tank transfers:</strong> {{ transfer_count }} transfer{{ transfer_count|pluralize }} ({{ transfer_total_litres|floatformat:2 }} L) were recorded. They are included in product-level tank adjustments and do not add fuel to the site's overall total.</p>{% endif %}
 <section class="cash-up-report-detail-section">
     <div class="section-heading"><h2>Totals by product (L)</h2></div>
     {% if product_rows %}
@@ -139,6 +138,28 @@
         </table>
     </div>
     {% else %}<p class="empty-state">No fuel readings were found for this period and shift selection.</p>{% endif %}
+</section>
+<section class="cash-up-report-detail-section fuel-report-transfers-section">
+    <div class="section-heading"><h2>Internal tank transfers</h2><span>{{ transfer_count }} transfer{{ transfer_count|pluralize }} ({{ transfer_total_litres|floatformat:2 }} L)</span></div>
+    <p class="fuel-report-note">Transfers are deducted from the source tank and added to the destination tank when they occur after the latest recorded dip. They do not add fuel to the site's overall total.</p>
+    {% if report_transfers %}
+    <div class="table-wrap fuel-report-table-wrap">
+        <table class="fuel-report-table">
+            <thead><tr><th>Date</th><th>Shift</th><th>From tank</th><th>To tank</th><th>Amount (L)</th></tr></thead>
+            <tbody>
+                {% for transfer in report_transfers %}
+                <tr>
+                    <td>{{ transfer.business_date|date:"d M Y" }}</td>
+                    <td>{{ transfer.shift_label }}</td>
+                    <td>{{ transfer.from_tank.name }}</td>
+                    <td>{{ transfer.to_tank.name }}</td>
+                    <td>{{ transfer.amount_litres|floatformat:2 }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}<p class="empty-state">No internal tank transfers were recorded in the selected period and shift.</p>{% endif %}
 </section>
 {% endblock %}
 {% block extra_js %}<script src="{% static 'js/report_date_range.js' %}" defer></script><script src="{% static 'js/print_fuel_report.js' %}" defer></script>{% endblock %}

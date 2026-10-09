@@ -614,6 +614,7 @@ def fuel_reports(request, slug):
 	transferred_out_by_tank = {}
 	transfer_count = 0
 	transfer_total_litres = Decimal("0")
+	report_transfers = []
 	if use_tank_readings:
 		bookings = FuelBooking.objects.filter(
 			site=site,
@@ -623,20 +624,28 @@ def fuel_reports(request, slug):
 		for booking in bookings:
 			key = (booking.business_date, booking.shift_label, booking.tank_id)
 			booked_in_by_tank[key] = booked_in_by_tank.get(key, Decimal("0")) + booking.qty_litres
-		transfers = list(FuelTransfer.objects.filter(
-			site=site,
-			business_date__gte=report_start - timedelta(days=365),
-			business_date__lte=report_end,
-		).select_related("from_tank", "to_tank"))
-		for transfer in transfers:
-			key = (transfer.business_date, transfer.shift_label)
-			out_key = (*key, transfer.from_tank_id)
-			in_key = (*key, transfer.to_tank_id)
-			transferred_out_by_tank[out_key] = transferred_out_by_tank.get(out_key, Decimal("0")) + transfer.amount_litres
-			transferred_in_by_tank[in_key] = transferred_in_by_tank.get(in_key, Decimal("0")) + transfer.amount_litres
-			if report_start <= transfer.business_date <= report_end and transfer.shift_label in selected_shifts:
-				transfer_count += 1
-				transfer_total_litres += transfer.amount_litres
+	transfers = list(FuelTransfer.objects.filter(
+		site=site,
+		business_date__lte=report_end,
+	).select_related("from_tank", "to_tank"))
+	for transfer in transfers:
+		key = (transfer.business_date, transfer.shift_label)
+		out_key = (*key, transfer.from_tank_id)
+		in_key = (*key, transfer.to_tank_id)
+		transferred_out_by_tank[out_key] = transferred_out_by_tank.get(out_key, Decimal("0")) + transfer.amount_litres
+		transferred_in_by_tank[in_key] = transferred_in_by_tank.get(in_key, Decimal("0")) + transfer.amount_litres
+		if report_start <= transfer.business_date <= report_end and transfer.shift_label in selected_shifts:
+			transfer_count += 1
+			transfer_total_litres += transfer.amount_litres
+			report_transfers.append(transfer)
+	report_transfers.sort(
+		key=lambda transfer: (
+			transfer.business_date,
+			shift_order.get(transfer.shift_label, -1),
+			transfer.created_at,
+		),
+		reverse=True,
+	)
 	last_tank_dips = {}
 	last_nozzle_readings = {}
 	product_labels = {}
@@ -669,16 +678,39 @@ def fuel_reports(request, slug):
 			tank__site=site,
 			daily_reading__business_date__lte=report_end,
 		).select_related("tank", "daily_reading").order_by(
-			"tank_id",
-			"-daily_reading__business_date",
-			"-daily_reading_id",
-		).distinct("tank_id")
+			"daily_reading__business_date",
+			"daily_reading_id",
+		)
+		latest_tank_reading_positions = {}
 		for tank_reading in latest_tank_readings:
-			balance_row = tank_balances[tank_reading.tank_id]
-			balance_row.update({
-				"balance": tank_reading.dip_litres,
-				"business_date": tank_reading.daily_reading.business_date,
-			})
+			reading_position = (
+				tank_reading.daily_reading.business_date,
+				shift_order.get(tank_reading.daily_reading.shift_label, -1),
+				tank_reading.daily_reading.created_at,
+			)
+			latest_position = latest_tank_reading_positions.get(tank_reading.tank_id)
+			if latest_position is None or reading_position >= latest_position:
+				latest_tank_reading_positions[tank_reading.tank_id] = reading_position
+				balance_row = tank_balances[tank_reading.tank_id]
+				balance_row.update({
+					"balance": tank_reading.dip_litres,
+					"business_date": tank_reading.daily_reading.business_date,
+				})
+		for transfer in transfers:
+			transfer_position = (
+				transfer.business_date,
+				shift_order.get(transfer.shift_label, -1),
+				transfer.created_at,
+			)
+			for tank_id, adjustment in (
+				(transfer.from_tank_id, -transfer.amount_litres),
+				(transfer.to_tank_id, transfer.amount_litres),
+			):
+				balance_row = tank_balances.get(tank_id)
+				reading_position = latest_tank_reading_positions.get(tank_id)
+				if balance_row and balance_row["balance"] is not None and reading_position:
+					if transfer_position > reading_position:
+						balance_row["balance"] += adjustment
 
 	def fresh_product(name):
 		return {
@@ -804,6 +836,7 @@ def fuel_reports(request, slug):
 		"use_electronic_readings": use_electronic_readings,
 		"transfer_count": transfer_count,
 		"transfer_total_litres": transfer_total_litres,
+		"report_transfers": report_transfers,
 		"tank_balances": list(tank_balances.values()),
 		"product_rows": product_rows,
 		"detail_rows": detail_rows,
