@@ -57,7 +57,7 @@
         <div class="cash-up-summary-row cash-up-summary-row--difference {% if summary_difference %}cash-up-difference--nonzero{% else %}cash-up-difference--zero{% endif %}"><span>Difference (Accounted For - Total Sales)</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_difference|floatformat:2 }}</strong></div>
     </div>
 </section>
-<section class="cash-up-report-detail-section">
+<section class="cash-up-report-detail-section{% if report_start != report_end %} cash-up-report-detail-section--new-page{% endif %}">
     <div class="section-heading"><h2>Daily and Shift Breakdown</h2></div>
     {% if report_rows %}
     <div class="table-wrap cash-up-report-table-wrap">

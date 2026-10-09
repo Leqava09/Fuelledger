@@ -1698,11 +1698,15 @@ class CashUpWorkflowTests(TestCase):
         self.assertEqual(week_report.context["summary_accounted_total"], Decimal("72.00"))
         self.assertEqual(week_report.context["summary_total_sales"], Decimal("600.00"))
         self.assertEqual(week_report.context["summary_difference"], Decimal("-528.00"))
+        self.assertContains(week_report, "cash-up-report-detail-section--new-page")
         self.assertContains(week_report, 'data-print-report')
         self.assertContains(week_report, 'class="cash-up-summary-row cash-up-summary-row--difference cash-up-difference--nonzero"')
         self.assertContains(week_report, 'class="cash-up-difference--nonzero"')
         self.assertEqual(len(week_report.context["report_rows"]), 3)
         self.assertEqual([row["shift"] for row in week_report.context["report_rows"]], ["Day", "Night", "Night"])
+
+        single_day_report = self.client.get(report_url, {"period": "day", "from_date": anchor_date.isoformat()})
+        self.assertNotContains(single_day_report, "cash-up-report-detail-section--new-page")
 
         day_report = self.client.get(report_url, {"period": "week", "from_date": anchor_date.isoformat(), "shift": "Day"})
         self.assertEqual(day_report.context["summary_accounted_total"], Decimal("17.00"))
