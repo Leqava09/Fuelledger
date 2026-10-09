@@ -1013,6 +1013,10 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertContains(response, 'data-workflow-draft-key="tank-reading"')
         self.assertContains(response, "data-unsaved-return")
         self.assertLess(response.content.decode().index("fuel-workflow-actions"), response.content.decode().index("fuel-reading-tabs"))
+        page_html = response.content.decode()
+        tab_html = page_html[page_html.index('class="fuel-reading-tabs"'):]
+        self.assertLess(tab_html.index("Fuel Sales"), tab_html.index("Tank Reading"))
+        self.assertContains(response, "fuel-reading-tab--fuel-sales")
         for reading_type in ("tank-reading", "fuel-sales", "mechanical-readings", "electronic-readings"):
             self.assertContains(response, reverse("fuel-reading-entry", args=[self.site.slug, reading_type]))
 
@@ -1286,12 +1290,174 @@ class DailyFuelReadingWorkflowTests(TestCase):
         mechanical_url = reverse("fuel-reading-entry", args=[self.site.slug, "mechanical-readings"])
         mechanical_page = self.client.get(mechanical_url, {"date": self.business_date.isoformat(), "shift": "Afternoon"})
         self.assertContains(mechanical_page, 'value="1200.00"')
-        self.assertContains(mechanical_page, 'value="-200.00" readonly class="reading-difference-field"')
+        self.assertContains(mechanical_page, 'value="200.00" readonly class="reading-difference-field"')
+        self.assertContains(mechanical_page, 'min="1200.00"')
 
         electronic_url = reverse("fuel-reading-entry", args=[self.site.slug, "electronic-readings"])
         electronic_page = self.client.get(electronic_url, {"date": self.business_date.isoformat(), "shift": "Afternoon"})
         self.assertContains(electronic_page, 'value="900.00"')
-        self.assertContains(electronic_page, 'value="-200.00" readonly class="reading-difference-field"')
+        self.assertContains(electronic_page, 'value="200.00" readonly class="reading-difference-field"')
+        self.assertContains(electronic_page, 'min="900.00"')
+
+        for reading_type, field_suffix, lower_value in (
+            ("mechanical-readings", "mechanical", "1199.99"),
+            ("electronic-readings", "electronic", "899.99"),
+        ):
+            response = self.client.post(
+                reverse("fuel-reading-entry", args=[self.site.slug, reading_type]),
+                {
+                    "business_date": self.business_date.isoformat(),
+                    "shift_label": "Afternoon",
+                    f"nozzle_{self.nozzle.pk}_{field_suffix}": lower_value,
+                    f"nozzle_{self.nozzle_two.pk}_{field_suffix}": "1500.00",
+                },
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertContains(response, "Reading cannot be below the previous shift reading.")
+
+    def test_fuel_report_labels_tank_shortage_and_meter_variance_direction(self):
+        previous_date = self.business_date - timedelta(days=1)
+        previous = DailyFuelReading.objects.create(
+            site=self.site,
+            business_date=previous_date,
+            shift_label="Day",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TankDipReading.objects.create(daily_reading=previous, tank=self.tank, dip_litres="1000.00")
+        NozzleFuelReading.objects.create(
+            daily_reading=previous,
+            nozzle=self.nozzle,
+            mechanical_reading="100.00",
+            electronic_reading="200.00",
+        )
+        current = DailyFuelReading.objects.create(
+            site=self.site,
+            business_date=self.business_date,
+            shift_label="Day",
+            created_by=self.user,
+            updated_by=self.user,
+            fuel_sales={"Diesel": "15.00"},
+        )
+        TankDipReading.objects.create(daily_reading=current, tank=self.tank, dip_litres="980.00")
+        NozzleFuelReading.objects.create(
+            daily_reading=current,
+            nozzle=self.nozzle,
+            mechanical_reading="117.00",
+            electronic_reading="213.00",
+        )
+
+        report = self.client.get(reverse("fuel-reports", args=[self.site.slug]), {
+            "period": "day",
+            "from_date": self.business_date.isoformat(),
+            "shift": "Day",
+        })
+
+        self.assertEqual(report.status_code, 200)
+        row = report.context["product_rows"][0]
+        self.assertEqual(row["tank_vs_sales"], Decimal("5.00"))
+        self.assertEqual(row["tank_vs_sales_status"], "Shortage")
+        self.assertEqual(row["mechanical_vs_sales"], Decimal("2.00"))
+        self.assertEqual(row["mechanical_vs_sales_status"], "Above sales")
+        self.assertEqual(row["electronic_vs_sales"], Decimal("-2.00"))
+        self.assertEqual(row["electronic_vs_sales_status"], "Below sales")
+
+    def test_fuel_report_adjusts_product_usage_for_deliveries_and_internal_transfers(self):
+        self.tank.capacity_litres = "3000.00"
+        self.tank.save(update_fields=["capacity_litres"])
+        previous_date = self.business_date - timedelta(days=1)
+        previous = DailyFuelReading.objects.create(
+            site=self.site,
+            business_date=previous_date,
+            shift_label="Day",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TankDipReading.objects.create(daily_reading=previous, tank=self.tank, dip_litres="1000.00")
+        TankDipReading.objects.create(daily_reading=previous, tank=self.tank_two, dip_litres="2000.00")
+        NozzleFuelReading.objects.create(
+            daily_reading=previous,
+            nozzle=self.nozzle,
+            mechanical_reading="1000.00",
+            electronic_reading="900.00",
+        )
+        NozzleFuelReading.objects.create(
+            daily_reading=previous,
+            nozzle=self.nozzle_two,
+            mechanical_reading="2000.00",
+            electronic_reading="1900.00",
+        )
+        FuelBooking.objects.create(
+            site=self.site,
+            tank=self.tank,
+            business_date=self.business_date,
+            shift_label="Day",
+            delivery_number=1,
+            qty_litres="2000.00",
+            created_by=self.user,
+        )
+        FuelTransfer.objects.create(
+            site=self.site,
+            from_tank=self.tank,
+            to_tank=self.tank_two,
+            business_date=self.business_date,
+            shift_label="Day",
+            amount_litres="50.00",
+            created_by=self.user,
+        )
+        current = DailyFuelReading.objects.create(
+            site=self.site,
+            business_date=self.business_date,
+            shift_label="Day",
+            created_by=self.user,
+            updated_by=self.user,
+            fuel_sales={"Diesel": "500.00", "Petrol": "50.00"},
+        )
+        TankDipReading.objects.create(daily_reading=current, tank=self.tank, dip_litres="2450.00")
+        TankDipReading.objects.create(daily_reading=current, tank=self.tank_two, dip_litres="2000.00")
+        NozzleFuelReading.objects.create(
+            daily_reading=current,
+            nozzle=self.nozzle,
+            mechanical_reading="1500.00",
+            electronic_reading="1400.00",
+        )
+        NozzleFuelReading.objects.create(
+            daily_reading=current,
+            nozzle=self.nozzle_two,
+            mechanical_reading="2050.00",
+            electronic_reading="1950.00",
+        )
+
+        report = self.client.get(reverse("fuel-reports", args=[self.site.slug]), {
+            "period": "day",
+            "from_date": self.business_date.isoformat(),
+            "shift": "Day",
+        })
+
+        self.assertEqual(report.status_code, 200)
+        products = {row["product"]: row for row in report.context["product_rows"]}
+        self.assertEqual(products["Diesel"]["booked_in"], Decimal("2000.00"))
+        self.assertEqual(products["Diesel"]["tank_decrease"], Decimal("500.00"))
+        self.assertEqual(products["Diesel"]["tank_vs_sales"], Decimal("0.00"))
+        self.assertEqual(products["Petrol"]["tank_decrease"], Decimal("50.00"))
+        self.assertEqual(products["Petrol"]["tank_vs_sales"], Decimal("0.00"))
+        self.assertEqual(report.context["transfer_count"], 1)
+        self.assertEqual(report.context["transfer_total_litres"], Decimal("50.00"))
+        self.assertContains(report, "Internal tank transfers")
+        self.assertContains(report, "Tank balances")
+        self.assertContains(report, "Print report")
+        self.assertContains(report, 'data-print-report')
+        balances = {row["tank"].name: row for row in report.context["tank_balances"]}
+        product_colors = {row["product_color"] for row in report.context["product_rows"]}
+        self.assertEqual(len(product_colors), 2)
+        self.assertLess(report.content.decode().index("Tank balances"), report.content.decode().index("Totals by product"))
+        self.assertContains(report, "fuel-report-balance")
+        for color in product_colors:
+            self.assertContains(report, f"fuel-report-product--{color}")
+        self.assertEqual(balances[self.tank.name]["tank"].capacity_litres, Decimal("3000.00"))
+        self.assertEqual(balances[self.tank.name]["balance"], Decimal("2450.00"))
+        self.assertEqual(balances[self.tank.name]["business_date"], self.business_date)
+        self.assertNotIn("shift", balances[self.tank.name])
 
     def test_fuel_reports_reconcile_tank_sales_and_nozzle_deltas_by_product_and_shift(self):
         self.site.shift_count = 2
@@ -1333,6 +1499,10 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertEqual(report.context["report_end"], self.business_date)
         self.assertEqual(len(report.context["product_rows"]), 2)
         self.assertEqual(len(report.context["detail_rows"]), 4)
+        self.assertContains(report, "Tank variance")
+        self.assertContains(report, "Mechanical variance")
+        self.assertContains(report, "Electronic variance")
+        self.assertContains(report, "Matched")
         for product in report.context["product_rows"]:
             expected_total = Decimal("200.00") if product["product"] == "Diesel" else Decimal("100.00")
             self.assertEqual(product["tank_decrease"], expected_total)

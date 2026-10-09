@@ -49,8 +49,8 @@ SITE_FORM_LABELS = {
 	"cash-up": "Cash Up",
 }
 FUEL_READING_FORM_LABELS = {
-	"tank-reading": "Tank Reading",
 	"fuel-sales": "Fuel Sales",
+	"tank-reading": "Tank Reading",
 	"mechanical-readings": "Mechanical Readings",
 	"electronic-readings": "Electronic Readings",
 }
@@ -541,19 +541,67 @@ def fuel_reports(request, slug):
 		).prefetch_related("tank_readings__tank", "nozzle_readings__nozzle__tank")
 	)
 	readings.sort(key=lambda row: (row.business_date, shift_order.get(row.shift_label, -1)))
+	booked_in_by_tank = {}
+	transferred_in_by_tank = {}
+	transferred_out_by_tank = {}
+	transfer_count = 0
+	transfer_total_litres = Decimal("0")
+	if use_tank_readings:
+		bookings = FuelBooking.objects.filter(
+			site=site,
+			business_date__gte=report_start - timedelta(days=365),
+			business_date__lte=report_end,
+		).select_related("tank")
+		for booking in bookings:
+			key = (booking.business_date, booking.shift_label, booking.tank_id)
+			booked_in_by_tank[key] = booked_in_by_tank.get(key, Decimal("0")) + booking.qty_litres
+		transfers = list(FuelTransfer.objects.filter(
+			site=site,
+			business_date__gte=report_start - timedelta(days=365),
+			business_date__lte=report_end,
+		).select_related("from_tank", "to_tank"))
+		for transfer in transfers:
+			key = (transfer.business_date, transfer.shift_label)
+			out_key = (*key, transfer.from_tank_id)
+			in_key = (*key, transfer.to_tank_id)
+			transferred_out_by_tank[out_key] = transferred_out_by_tank.get(out_key, Decimal("0")) + transfer.amount_litres
+			transferred_in_by_tank[in_key] = transferred_in_by_tank.get(in_key, Decimal("0")) + transfer.amount_litres
+			if report_start <= transfer.business_date <= report_end and transfer.shift_label in selected_shifts:
+				transfer_count += 1
+				transfer_total_litres += transfer.amount_litres
 	last_tank_dips = {}
 	last_nozzle_readings = {}
 	product_labels = {}
 	period_products = {}
 	detail_rows = []
+	product_colors = {}
+	product_color_names = ("tone-1", "tone-2", "tone-3", "tone-4", "tone-5", "tone-6")
 
 	def product_key(name):
 		return name.strip().casefold()
 
+	def product_color(name):
+		key = product_key(name)
+		if key not in product_colors:
+			product_colors[key] = product_color_names[len(product_colors) % len(product_color_names)]
+		return product_colors[key]
+
+	tank_balances = {
+		tank.pk: {
+			"tank": tank,
+			"product_color": product_color(tank.product),
+			"balance": None,
+			"business_date": None,
+		}
+		for tank in site.tanks.all()
+	} if use_tank_readings else {}
+
 	def fresh_product(name):
 		return {
 			"product": name,
+			"product_color": product_color(name),
 			"tank_decrease": Decimal("0"),
+			"booked_in": Decimal("0"),
 			"fuel_sales": Decimal("0"),
 			"mechanical": Decimal("0"),
 			"electronic": Decimal("0"),
@@ -578,8 +626,18 @@ def fuel_reports(request, slug):
 				previous = last_tank_dips.get(tank_reading.tank_id)
 				if in_period:
 					product = current_product(tank_reading.tank.product)
+					balance_row = tank_balances[tank_reading.tank_id]
+					balance_row.update({
+						"balance": tank_reading.dip_litres,
+						"business_date": reading.business_date,
+					})
+					movement_key = (reading.business_date, reading.shift_label, tank_reading.tank_id)
+					booked_in = booked_in_by_tank.get(movement_key, Decimal("0"))
+					transfer_in = transferred_in_by_tank.get(movement_key, Decimal("0"))
+					transfer_out = transferred_out_by_tank.get(movement_key, Decimal("0"))
+					product["booked_in"] += booked_in
 					if previous is not None and previous[0] == key:
-						product["tank_decrease"] += previous[1] - tank_reading.dip_litres
+						product["tank_decrease"] += previous[1] - tank_reading.dip_litres + booked_in + transfer_in - transfer_out
 						product["has_tank"] = True
 				last_tank_dips[tank_reading.tank_id] = (key, tank_reading.dip_litres)
 
@@ -620,6 +678,7 @@ def fuel_reports(request, slug):
 			if key not in period_products:
 				period_products[key] = fresh_product(product["product"])
 			period_product = period_products[key]
+			period_product["booked_in"] += product["booked_in"]
 			for metric in ("tank_decrease", "fuel_sales", "mechanical", "electronic"):
 				has_flag = {
 					"tank_decrease": "has_tank",
@@ -654,6 +713,9 @@ def fuel_reports(request, slug):
 		"use_fuel_sales": use_fuel_sales,
 		"use_mechanical_readings": use_mechanical_readings,
 		"use_electronic_readings": use_electronic_readings,
+		"transfer_count": transfer_count,
+		"transfer_total_litres": transfer_total_litres,
+		"tank_balances": list(tank_balances.values()),
 		"product_rows": product_rows,
 		"detail_rows": detail_rows,
 	})
@@ -681,6 +743,24 @@ def _fuel_report_display_row(values):
 		"tank_vs_mechanical": tank - mechanical if tank is not None and mechanical is not None else None,
 		"tank_vs_electronic": tank - electronic if tank is not None and electronic is not None else None,
 	})
+	for comparison, positive_label, negative_label, positive_tone, negative_tone in (
+		("tank_vs_sales", "Shortage", "Surplus", "shortage", "surplus"),
+		("mechanical_vs_sales", "Above sales", "Below sales", "higher", "lower"),
+		("electronic_vs_sales", "Above sales", "Below sales", "higher", "lower"),
+	):
+		variance = display_values[comparison]
+		if variance is None:
+			display_values[f"{comparison}_status"] = None
+			display_values[f"{comparison}_tone"] = ""
+		elif variance > 0:
+			display_values[f"{comparison}_status"] = positive_label
+			display_values[f"{comparison}_tone"] = positive_tone
+		elif variance < 0:
+			display_values[f"{comparison}_status"] = negative_label
+			display_values[f"{comparison}_tone"] = negative_tone
+		else:
+			display_values[f"{comparison}_status"] = "Matched"
+			display_values[f"{comparison}_tone"] = "matched"
 	return display_values
 
 
@@ -1238,6 +1318,7 @@ def fuel_reading_entry(request, slug, reading_type):
 			data=request.POST if request.method == "POST" else None,
 			initial=initial,
 			initial_readings=initial_tank_readings if reading_type == "tank-reading" else initial_nozzle_readings,
+			**({"previous_readings": previous_nozzle_readings} if reading_type in {"mechanical-readings", "electronic-readings"} else {}),
 		)
 	if request.method == "POST" and form.is_valid():
 		fields = form.tank_fields if reading_type == "tank-reading" else form.product_fields if reading_type == "fuel-sales" else form.nozzle_fields
@@ -1358,7 +1439,7 @@ def fuel_reading_entry(request, slug, reading_type):
 				if previous_tank_readings.get(tank.pk, (None, None))[0] is not None
 				and previous_tank_readings[tank.pk][0].strip().casefold() == tank.product.strip().casefold()
 				else None,
-				"difference": _fuel_reading_difference(
+				"difference": _tank_reading_difference(
 					previous_tank_readings.get(tank.pk, (None, None))[1]
 					if previous_tank_readings.get(tank.pk, (None, None))[0] is not None
 					and previous_tank_readings[tank.pk][0].strip().casefold() == tank.product.strip().casefold()
@@ -1444,9 +1525,13 @@ def _fuel_reading_difference(previous, current):
 	if previous in (None, "") or current in (None, ""):
 		return None
 	try:
-		return Decimal(str(previous)) - Decimal(str(current))
+		return Decimal(str(current)) - Decimal(str(previous))
 	except (ArithmeticError, TypeError, ValueError):
 		return None
+
+
+def _tank_reading_difference(previous, current):
+	return _fuel_reading_difference(current, previous)
 
 
 def _daily_reading_snapshot(reading):

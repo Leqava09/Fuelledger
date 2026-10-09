@@ -12,7 +12,9 @@
 				const previousValue = Number.parseFloat(previous.value);
 				const currentValue = Number.parseFloat(current.value);
 				difference.value = Number.isFinite(previousValue) && Number.isFinite(currentValue)
-					? (previousValue - currentValue).toFixed(2)
+					? (current.dataset.readingDirection === "increasing"
+						? currentValue - previousValue
+						: previousValue - currentValue).toFixed(2)
 					: "";
 			};
 			current.addEventListener("input", updateDifference);

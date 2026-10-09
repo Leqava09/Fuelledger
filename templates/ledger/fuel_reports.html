@@ -7,7 +7,10 @@
         <div class="eyebrow"><a href="{% url 'site-dashboard' site.slug %}?date={{ from_date|date:'Y-m-d' }}">{{ site.name }}</a> / FUEL REPORTS</div>
         <h1>Fuel Reports</h1>
     </div>
-    <a class="button secondary" href="{% url 'site-dashboard' site.slug %}?date={{ from_date|date:'Y-m-d' }}">Return to site</a>
+    <div class="heading-actions">
+        <button class="button secondary fuel-report-print-button" type="button" data-print-report>Print report</button>
+        <a class="button secondary" href="{% url 'site-dashboard' site.slug %}?date={{ from_date|date:'Y-m-d' }}">Return to site</a>
+    </div>
 </div>
 <section class="form-section cash-up-report-filter-section">
     <form class="cash-up-report-filters" method="get">
@@ -43,20 +46,58 @@
     <h2>{{ period_label }}: {{ report_start|date:"d M Y" }}{% if report_end != report_start %} to {{ report_end|date:"d M Y" }}{% endif %}</h2>
     <span>{% if shift_filter == "all" %}All shifts{% else %}{{ shift_filter }} shift{% endif %}</span>
 </div>
+{% if use_tank_readings %}
+<section class="cash-up-report-detail-section fuel-report-tank-section">
+    <div class="section-heading"><h2>Tank balances</h2><span>Latest recorded dip in the selected range</span></div>
+    {% if tank_balances %}
+    <div class="table-wrap fuel-report-table-wrap">
+        <table class="fuel-report-table fuel-report-tank-table">
+            <thead><tr><th>Tank</th><th>Product</th><th>Capacity (L)</th><th>Balance (L)</th><th>Last recorded</th></tr></thead>
+            <tbody>
+                {% for row in tank_balances %}
+                <tr>
+                    <td>{{ row.tank.name }}</td>
+                    <td class="fuel-report-product fuel-report-product--{{ row.product_color }}">{{ row.tank.product }}</td>
+                    <td>{% if row.tank.capacity_litres %}{{ row.tank.capacity_litres|floatformat:2 }}{% else %}Not set{% endif %}</td>
+                    <td class="fuel-report-balance">{% if row.balance is not None %}{{ row.balance|floatformat:2 }}{% else %}No reading{% endif %}</td>
+                    <td>{% if row.business_date %}{{ row.business_date|date:"d M Y" }}{% else %}No reading{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}<p class="empty-state">No tanks are configured for this site.</p>{% endif %}
+</section>
+{% endif %}
+{% if transfer_count %}<p class="fuel-report-note"><strong>Internal tank transfers:</strong> {{ transfer_count }} transfer{{ transfer_count|pluralize }} ({{ transfer_total_litres|floatformat:2 }} L) were recorded. They are included in product-level tank adjustments and do not add fuel to the site's overall total.</p>{% endif %}
 <section class="cash-up-report-detail-section">
-    <div class="section-heading"><h2>Product Reconciliation (L)</h2></div>
+    <div class="section-heading"><h2>Totals by product (L)</h2></div>
     {% if product_rows %}
     <div class="table-wrap fuel-report-table-wrap">
         <table class="fuel-report-table">
-            <thead><tr><th>Product</th>{% if use_tank_readings %}<th>Tank decrease</th>{% endif %}{% if use_fuel_sales %}<th>Fuel Sales</th>{% endif %}{% if use_tank_readings and use_fuel_sales %}<th>Tank - Sales</th>{% endif %}{% if use_mechanical_readings %}<th>Mechanical</th>{% endif %}{% if use_electronic_readings %}<th>Electronic</th>{% endif %}{% if use_mechanical_readings and use_fuel_sales %}<th>Mechanical - Sales</th>{% endif %}{% if use_electronic_readings and use_fuel_sales %}<th>Electronic - Sales</th>{% endif %}{% if use_mechanical_readings and use_electronic_readings %}<th>Mechanical - Electronic</th>{% endif %}{% if use_tank_readings and use_mechanical_readings %}<th>Tank - Mechanical</th>{% endif %}{% if use_tank_readings and use_electronic_readings %}<th>Tank - Electronic</th>{% endif %}</tr></thead>
+            <thead>
+                <tr>
+                    <th>Product</th>
+                    {% if use_fuel_sales %}<th>Fuel Sales</th>{% endif %}
+                    {% if use_tank_readings %}<th>Booked in</th><th>Adjusted tank usage</th>{% endif %}
+                    {% if use_tank_readings and use_fuel_sales %}<th>Tank variance</th>{% endif %}
+                    {% if use_mechanical_readings %}<th>Mechanical total</th>{% endif %}
+                    {% if use_mechanical_readings and use_fuel_sales %}<th>Mechanical variance</th>{% endif %}
+                    {% if use_electronic_readings %}<th>Electronic total</th>{% endif %}
+                    {% if use_electronic_readings and use_fuel_sales %}<th>Electronic variance</th>{% endif %}
+                </tr>
+            </thead>
             <tbody>
                 {% for row in product_rows %}
                 <tr>
-                    <td>{{ row.product }}</td>
-                    {% if use_tank_readings %}<td>{{ row.tank_decrease|floatformat:2 }}</td>{% endif %}{% if use_fuel_sales %}<td>{{ row.fuel_sales|floatformat:2 }}</td>{% endif %}{% if use_tank_readings and use_fuel_sales %}<td class="fuel-report-difference">{{ row.tank_vs_sales|floatformat:2 }}</td>{% endif %}
-                    {% if use_mechanical_readings %}<td>{{ row.mechanical|floatformat:2 }}</td>{% endif %}{% if use_electronic_readings %}<td>{{ row.electronic|floatformat:2 }}</td>{% endif %}
-                    {% if use_mechanical_readings and use_fuel_sales %}<td class="fuel-report-difference">{{ row.mechanical_vs_sales|floatformat:2 }}</td>{% endif %}{% if use_electronic_readings and use_fuel_sales %}<td class="fuel-report-difference">{{ row.electronic_vs_sales|floatformat:2 }}</td>{% endif %}
-                    {% if use_mechanical_readings and use_electronic_readings %}<td class="fuel-report-difference">{{ row.mechanical_vs_electronic|floatformat:2 }}</td>{% endif %}{% if use_tank_readings and use_mechanical_readings %}<td class="fuel-report-difference">{{ row.tank_vs_mechanical|floatformat:2 }}</td>{% endif %}{% if use_tank_readings and use_electronic_readings %}<td class="fuel-report-difference">{{ row.tank_vs_electronic|floatformat:2 }}</td>{% endif %}
+                    <td class="fuel-report-product fuel-report-product--{{ row.product_color }}">{{ row.product }}</td>
+                    {% if use_fuel_sales %}<td>{{ row.fuel_sales|floatformat:2 }}</td>{% endif %}
+                    {% if use_tank_readings %}<td>{{ row.booked_in|floatformat:2 }}</td><td>{{ row.tank_decrease|floatformat:2 }}</td>{% endif %}
+                    {% if use_tank_readings and use_fuel_sales %}<td class="fuel-report-difference fuel-report-variance fuel-report-variance--{{ row.tank_vs_sales_tone }}"><strong>{{ row.tank_vs_sales|floatformat:2 }}</strong><span>{{ row.tank_vs_sales_status }}</span></td>{% endif %}
+                    {% if use_mechanical_readings %}<td>{{ row.mechanical|floatformat:2 }}</td>{% endif %}
+                    {% if use_mechanical_readings and use_fuel_sales %}<td class="fuel-report-difference fuel-report-variance fuel-report-variance--{{ row.mechanical_vs_sales_tone }}"><strong>{{ row.mechanical_vs_sales|floatformat:2 }}</strong><span>{{ row.mechanical_vs_sales_status }}</span></td>{% endif %}
+                    {% if use_electronic_readings %}<td>{{ row.electronic|floatformat:2 }}</td>{% endif %}
+                    {% if use_electronic_readings and use_fuel_sales %}<td class="fuel-report-difference fuel-report-variance fuel-report-variance--{{ row.electronic_vs_sales_tone }}"><strong>{{ row.electronic_vs_sales|floatformat:2 }}</strong><span>{{ row.electronic_vs_sales_status }}</span></td>{% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
@@ -65,19 +106,33 @@
     {% else %}<p class="empty-state">No fuel readings were found for this period and shift selection.</p>{% endif %}
 </section>
 <section class="cash-up-report-detail-section">
-    <div class="section-heading"><h2>Date and Shift Breakdown</h2></div>
+    <div class="section-heading"><h2>By date and shift (L)</h2></div>
     {% if detail_rows %}
     <div class="table-wrap fuel-report-table-wrap">
         <table class="fuel-report-table">
-            <thead><tr><th>Date</th><th>Shift</th><th>Product</th>{% if use_tank_readings %}<th>Tank decrease</th>{% endif %}{% if use_fuel_sales %}<th>Fuel Sales</th>{% endif %}{% if use_tank_readings and use_fuel_sales %}<th>Tank - Sales</th>{% endif %}{% if use_mechanical_readings %}<th>Mechanical</th>{% endif %}{% if use_electronic_readings %}<th>Electronic</th>{% endif %}{% if use_mechanical_readings and use_fuel_sales %}<th>Mechanical - Sales</th>{% endif %}{% if use_electronic_readings and use_fuel_sales %}<th>Electronic - Sales</th>{% endif %}{% if use_mechanical_readings and use_electronic_readings %}<th>Mechanical - Electronic</th>{% endif %}{% if use_tank_readings and use_mechanical_readings %}<th>Tank - Mechanical</th>{% endif %}{% if use_tank_readings and use_electronic_readings %}<th>Tank - Electronic</th>{% endif %}</tr></thead>
+            <thead>
+                <tr>
+                    <th>Date</th><th>Shift</th><th>Product</th>
+                    {% if use_fuel_sales %}<th>Fuel Sales</th>{% endif %}
+                    {% if use_tank_readings %}<th>Booked in</th><th>Adjusted tank usage</th>{% endif %}
+                    {% if use_tank_readings and use_fuel_sales %}<th>Tank variance</th>{% endif %}
+                    {% if use_mechanical_readings %}<th>Mechanical total</th>{% endif %}
+                    {% if use_mechanical_readings and use_fuel_sales %}<th>Mechanical variance</th>{% endif %}
+                    {% if use_electronic_readings %}<th>Electronic total</th>{% endif %}
+                    {% if use_electronic_readings and use_fuel_sales %}<th>Electronic variance</th>{% endif %}
+                </tr>
+            </thead>
             <tbody>
                 {% for row in detail_rows %}
                 <tr>
-                    <td>{{ row.business_date|date:"d M Y" }}</td><td>{{ row.shift }}</td><td>{{ row.product }}</td>
-                    {% if use_tank_readings %}<td>{{ row.tank_decrease|floatformat:2 }}</td>{% endif %}{% if use_fuel_sales %}<td>{{ row.fuel_sales|floatformat:2 }}</td>{% endif %}{% if use_tank_readings and use_fuel_sales %}<td class="fuel-report-difference">{{ row.tank_vs_sales|floatformat:2 }}</td>{% endif %}
-                    {% if use_mechanical_readings %}<td>{{ row.mechanical|floatformat:2 }}</td>{% endif %}{% if use_electronic_readings %}<td>{{ row.electronic|floatformat:2 }}</td>{% endif %}
-                    {% if use_mechanical_readings and use_fuel_sales %}<td class="fuel-report-difference">{{ row.mechanical_vs_sales|floatformat:2 }}</td>{% endif %}{% if use_electronic_readings and use_fuel_sales %}<td class="fuel-report-difference">{{ row.electronic_vs_sales|floatformat:2 }}</td>{% endif %}
-                    {% if use_mechanical_readings and use_electronic_readings %}<td class="fuel-report-difference">{{ row.mechanical_vs_electronic|floatformat:2 }}</td>{% endif %}{% if use_tank_readings and use_mechanical_readings %}<td class="fuel-report-difference">{{ row.tank_vs_mechanical|floatformat:2 }}</td>{% endif %}{% if use_tank_readings and use_electronic_readings %}<td class="fuel-report-difference">{{ row.tank_vs_electronic|floatformat:2 }}</td>{% endif %}
+                    <td>{{ row.business_date|date:"d M Y" }}</td><td>{{ row.shift }}</td><td class="fuel-report-product fuel-report-product--{{ row.product_color }}">{{ row.product }}</td>
+                    {% if use_fuel_sales %}<td>{{ row.fuel_sales|floatformat:2 }}</td>{% endif %}
+                    {% if use_tank_readings %}<td>{{ row.booked_in|floatformat:2 }}</td><td>{{ row.tank_decrease|floatformat:2 }}</td>{% endif %}
+                    {% if use_tank_readings and use_fuel_sales %}<td class="fuel-report-difference fuel-report-variance fuel-report-variance--{{ row.tank_vs_sales_tone }}"><strong>{{ row.tank_vs_sales|floatformat:2 }}</strong><span>{{ row.tank_vs_sales_status }}</span></td>{% endif %}
+                    {% if use_mechanical_readings %}<td>{{ row.mechanical|floatformat:2 }}</td>{% endif %}
+                    {% if use_mechanical_readings and use_fuel_sales %}<td class="fuel-report-difference fuel-report-variance fuel-report-variance--{{ row.mechanical_vs_sales_tone }}"><strong>{{ row.mechanical_vs_sales|floatformat:2 }}</strong><span>{{ row.mechanical_vs_sales_status }}</span></td>{% endif %}
+                    {% if use_electronic_readings %}<td>{{ row.electronic|floatformat:2 }}</td>{% endif %}
+                    {% if use_electronic_readings and use_fuel_sales %}<td class="fuel-report-difference fuel-report-variance fuel-report-variance--{{ row.electronic_vs_sales_tone }}"><strong>{{ row.electronic_vs_sales|floatformat:2 }}</strong><span>{{ row.electronic_vs_sales_status }}</span></td>{% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
@@ -86,4 +141,4 @@
     {% else %}<p class="empty-state">No fuel readings were found for this period and shift selection.</p>{% endif %}
 </section>
 {% endblock %}
-{% block extra_js %}<script src="{% static 'js/report_date_range.js' %}" defer></script>{% endblock %}
+{% block extra_js %}<script src="{% static 'js/report_date_range.js' %}" defer></script><script src="{% static 'js/print_fuel_report.js' %}" defer></script>{% endblock %}

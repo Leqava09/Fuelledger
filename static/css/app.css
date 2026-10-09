@@ -116,6 +116,8 @@ tbody tr:last-child td { border-bottom: 0; }
 .fuel-reading-tab.button { color: var(--teal-dark); background: var(--mint); border-color: #c5ddd1; text-decoration: none; }
 .fuel-reading-tab.button:hover { background: #d4eadf; }
 .fuel-reading-tab.button[aria-selected="true"] { background: #c5e2d3; border-color: #a8cdb9; }
+.fuel-reading-tab--fuel-sales.button, .fuel-reading-tab--fuel-sales.button[aria-selected="true"] { color: #245579; background: #e3f1fb; border-color: #b9d8ed; }
+.fuel-reading-tab--fuel-sales.button:hover { background: #d5eafa; }
 .site-tools { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 14px; }
 .book-in-form { max-width: 850px; }
 .quantity-cell { width: 190px; }
@@ -206,9 +208,41 @@ tbody tr:last-child td { border-bottom: 0; }
 .cash-up-report-table th:nth-child(n+3), .cash-up-report-table td:nth-child(n+3) { text-align: right; }
 .cash-up-report-table td:first-child, .cash-up-report-table td:nth-child(2) { text-align: left; }
 .cash-up-report-payout { color: #873b28; background: #fff4ee; font-weight: 700; }
-.fuel-report-table th, .fuel-report-table td { text-align: right; }
-.fuel-report-table th:first-child, .fuel-report-table td:first-child, .fuel-report-table th:nth-child(2), .fuel-report-table td:nth-child(2), .fuel-report-table th:nth-child(3), .fuel-report-table td:nth-child(3) { text-align: left; }
+.fuel-report-table th, .fuel-report-table td { text-align: center; }
+.fuel-report-table { table-layout: fixed; font-size: 12px; }
+.fuel-report-table th, .fuel-report-table td { padding: 8px 7px; white-space: normal; overflow-wrap: anywhere; }
+.fuel-report-table th { text-align: center !important; vertical-align: middle; }
+.fuel-report-table td:not(.fuel-report-variance) { font-variant-numeric: tabular-nums; }
+.fuel-report-tank-table { max-width: 760px; }
+.cash-up-report-detail-section .section-heading h2 { font-size: 17px; }
+.fuel-report-product { font-weight: 700; }
+.fuel-report-product--tone-1 { color: #155d62; background: #e3f2f2; }
+.fuel-report-product--tone-2 { color: #31547d; background: #e7effa; }
+.fuel-report-product--tone-3 { color: #765a1d; background: #faf1d9; }
+.fuel-report-product--tone-4 { color: #80445e; background: #f8e9ef; }
+.fuel-report-product--tone-5 { color: #426b43; background: #e9f3e7; }
+.fuel-report-product--tone-6 { color: #80543a; background: #f7eade; }
+.fuel-report-balance { color: #124f47; background: #dff0eb; font-weight: 700; }
 .fuel-report-difference { background: #f5eef9; font-variant-numeric: tabular-nums; }
+.fuel-report-variance { min-width: 112px; text-align: center !important; }
+.fuel-report-variance strong, .fuel-report-variance span { display: block; }
+.fuel-report-variance span { margin-top: 3px; font-size: 11px; font-weight: 700; }
+.fuel-report-variance--shortage, .fuel-report-variance--surplus, .fuel-report-variance--higher, .fuel-report-variance--lower { color: #873b28; background: #fff0e9; }
+.fuel-report-variance--matched { color: #17664f; background: #e9f6ef; }
+.fuel-report-note { margin: 14px 0; padding: 10px 12px; border-left: 3px solid #5c9fc5; color: #294d63; background: #edf7fc; font-size: 12px; }
+@page { size: landscape; margin: 10mm; }
+@media print {
+    body { background: white !important; }
+    .topbar, .page-heading .heading-actions, .cash-up-report-filter-section { display: none !important; }
+    .page-shell { width: 100%; max-width: none; margin: 0; padding: 0; }
+    .table-wrap, .fuel-report-table-wrap { overflow: visible !important; border: 0; }
+    .fuel-report-table { width: 100%; font-size: 8pt; }
+    .fuel-report-table th, .fuel-report-table td { padding: 4px 3px; }
+    .fuel-report-variance span { font-size: 7pt; }
+    .cash-up-report-detail-section { margin-top: 12px; break-inside: avoid; }
+    .fuel-report-table thead { display: table-header-group; }
+    .fuel-report-table tr { break-inside: avoid; }
+}
 .remove-repeat-row { position: absolute; top: 7px; right: 7px; width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid #e7b4a4; border-radius: 50%; color: #8b3a26; background: #fff5f0; cursor: pointer; font: 600 20px/1 "Aptos", "Segoe UI", sans-serif; }
 .remove-repeat-row:hover { background: #ffe4d9; }
 .remove-repeat-row:disabled { visibility: hidden; pointer-events: none; }

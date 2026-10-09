@@ -363,7 +363,7 @@ class TankReadingForm(SiteReadingForm):
 				max_digits=12,
 				decimal_places=2,
 				initial=previous.get("dip_litres"),
-				widget=forms.NumberInput(attrs={"min": "0", "step": "0.01", "data-reading-current": "true"}),
+				widget=forms.NumberInput(attrs={"min": "0", "step": "0.01", "data-reading-current": "true", "data-reading-direction": "decreasing"}),
 			)
 			self.fields[depth_field_name] = forms.DecimalField(
 				label="Depth (cm)",
@@ -410,9 +410,10 @@ class NozzleReadingForm(SiteReadingForm):
 	reading_type = ""
 	reading_label = ""
 
-	def __init__(self, site, *args, initial_readings=None, **kwargs):
+	def __init__(self, site, *args, initial_readings=None, previous_readings=None, **kwargs):
 		super().__init__(site, *args, **kwargs)
 		initial_readings = initial_readings or {}
+		previous_readings = previous_readings or {}
 		nozzles = [
 			(tank, nozzle)
 			for tank in site.tanks.prefetch_related("nozzles").all()
@@ -422,13 +423,23 @@ class NozzleReadingForm(SiteReadingForm):
 		self.nozzle_fields = []
 		for tank, nozzle in nozzles:
 			field_name = f"nozzle_{nozzle.pk}_{self.reading_type}"
+			previous_reading = previous_readings.get(nozzle.pk)
+			minimum_reading = previous_reading if previous_reading is not None else Decimal("0")
 			self.fields[field_name] = forms.DecimalField(
 				label=self.reading_label,
-				min_value=0,
+				min_value=minimum_reading,
 				max_digits=14,
 				decimal_places=2,
 				initial=initial_readings.get(nozzle.pk),
-				widget=forms.NumberInput(attrs={"min": "0", "step": "0.01", "data-reading-current": "true"}),
+				error_messages={
+					"min_value": "Reading cannot be below the previous shift reading."
+				} if previous_reading is not None else {},
+				widget=forms.NumberInput(attrs={
+					"min": str(minimum_reading),
+					"step": "0.01",
+					"data-reading-current": "true",
+					"data-reading-direction": "increasing",
+				}),
 			)
 			self.nozzle_fields.append((tank, nozzle, field_name))
 
