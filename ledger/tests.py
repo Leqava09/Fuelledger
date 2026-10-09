@@ -1665,7 +1665,7 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertEqual(len(report.context["product_rows"]), 2)
         self.assertEqual(len(report.context["detail_rows"]), 4)
         self.assertEqual([row["shift"] for row in report.context["detail_rows"]], ["Night", "Night", "Day", "Day"])
-        self.assertContains(report, "Tank variance")
+        self.assertContains(report, "Sales/Dip Variance")
         self.assertContains(report, "Mechanical variance")
         self.assertContains(report, "Electronic variance")
         self.assertContains(report, "Matched")
