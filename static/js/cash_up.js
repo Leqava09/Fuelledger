@@ -140,7 +140,7 @@ if (cashUpForm) {
 		const row = button.closest("[data-repeat-row]");
 		const container = row?.parentElement;
 		const countInput = cashUpForm.querySelector('[data-repeat-count="airtime"]');
-		if (!row || !container || container.children.length <= 1 || row === container.firstElementChild) return;
+		if (!row || !container || container.children.length <= 1) return;
 		row.remove();
 		Array.from(container.children).forEach((entry, offset) => {
 			const index = offset + 1;
@@ -158,7 +158,7 @@ if (cashUpForm) {
 			});
 			const removeButton = entry.querySelector("[data-remove-repeat]");
 			if (removeButton) {
-				removeButton.disabled = index === 1;
+				removeButton.disabled = container.children.length <= 1;
 				removeButton.setAttribute("aria-label", `Remove Airtime entry ${index}`);
 			}
 		});

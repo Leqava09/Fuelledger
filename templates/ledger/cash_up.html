@@ -49,7 +49,7 @@
                 <div class="calculated-row airtime-row-difference"><span>Difference</span><div class="calculated-money">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}<strong data-airtime-difference>{{ row.difference|floatformat:2 }}</strong></div></div>
                 {% endif %}
                 {% endfor %}
-                <button class="remove-repeat-row" type="button" data-remove-repeat="airtime" aria-label="Remove Airtime entry {{ row.index }}"{% if row.index == 1 %} disabled{% endif %}><span aria-hidden="true">−</span></button>
+                <button class="remove-repeat-row" type="button" data-remove-repeat="airtime" aria-label="Remove Airtime entry {{ row.index }}"{% if airtime_rows|length <= 1 %} disabled{% endif %}><span aria-hidden="true">−</span></button>
             </div>
             {% endfor %}
         </div>

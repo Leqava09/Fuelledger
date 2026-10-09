@@ -927,6 +927,7 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 	if request.method == "POST":
 		save_mode = request.POST.get("save_mode", "tab")
 		airtime_sequence_issues = []
+		airtime_sequence_checked = False
 		sequence_confirmed = request.POST.get("airtime_sequence_confirmed") == "1"
 		if save_mode == "exit":
 			try:
@@ -947,6 +948,8 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 				tab_values = all_tab_values.get(tab_key)
 				if not isinstance(tab_values, dict):
 					continue
+				if tab_key == "airtime":
+					airtime_sequence_checked = True
 				data = {
 					**tab_values,
 					"business_date": selected_date.isoformat(),
@@ -971,15 +974,16 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 			if validation_errors:
 				form.add_error(None, "Check the invalid entries in these sections before saving all: " + ", ".join(validation_errors))
 			else:
-				return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, "exit", section, airtime_sequence_issues)
+				return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, "exit", section, airtime_sequence_issues, airtime_sequence_checked)
 		elif form.is_valid():
 			updated_values = _apply_cash_up_form_values(initial_values, form, previous_airtime_balance=previous_airtime_balance)
 			if section == "airtime":
+				airtime_sequence_checked = True
 				airtime_sequence_issues = _airtime_sequence_issues(updated_values, previous_airtime_shift_number)
 				if airtime_sequence_issues and not sequence_confirmed:
 					form.add_error(None, "Confirm the Airtime Shift Number sequence before saving.")
 				else:
-					return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, save_mode, section, airtime_sequence_issues)
+					return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, save_mode, section, airtime_sequence_issues, airtime_sequence_checked)
 			else:
 				return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, save_mode, section)
 	else:
@@ -1146,7 +1150,7 @@ def _apply_cash_up_form_values(values, form, previous_airtime_balance=None):
 	return updated_values
 
 
-def _complete_cash_up_save(request, site, record, before, updated_values, selected_date, shift_label, save_mode, section, airtime_sequence_issues=None):
+def _complete_cash_up_save(request, site, record, before, updated_values, selected_date, shift_label, save_mode, section, airtime_sequence_issues=None, airtime_sequence_checked=False):
 	airtime_sequence_issues = airtime_sequence_issues or []
 	with transaction.atomic():
 		if record is None:
@@ -1160,7 +1164,22 @@ def _complete_cash_up_save(request, site, record, before, updated_values, select
 		else:
 			record.values = updated_values
 			record.save(update_fields=["values", "updated_at"])
-		for issue in airtime_sequence_issues:
+		if airtime_sequence_checked:
+			issue_by_index = {issue["card_index"]: issue for issue in airtime_sequence_issues}
+			for alert in AirtimeSequenceAlert.objects.filter(cash_up_record=record):
+				issue = issue_by_index.pop(alert.card_index, None)
+				if issue is None:
+					alert.delete()
+					continue
+				alert.previous_number = issue["previous_number"]
+				alert.expected_number = issue["expected_number"]
+				alert.entered_number = issue["entered_number"]
+				alert.flagged_by = request.user
+				alert.approved = False
+				alert.approved_by = None
+				alert.approved_at = None
+				alert.save(update_fields=["previous_number", "expected_number", "entered_number", "flagged_by", "approved", "approved_by", "approved_at"])
+		for issue in issue_by_index.values() if airtime_sequence_checked else airtime_sequence_issues:
 			alert, created = AirtimeSequenceAlert.objects.get_or_create(
 				cash_up_record=record,
 				card_index=issue["card_index"],

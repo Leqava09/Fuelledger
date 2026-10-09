@@ -1757,6 +1757,56 @@ class CashUpWorkflowTests(TestCase):
         self.assertContains(cleared_dashboard, "0 pending")
         self.assertNotContains(cleared_dashboard, "expected 353")
 
+    def test_deleted_airtime_card_and_its_hq_alert_are_removed(self):
+        previous_date = self.business_date - timedelta(days=1)
+        CashUpShiftRecord.objects.create(
+            site=self.site,
+            business_date=previous_date,
+            shift_label="Night",
+            created_by=self.user,
+            values={"airtime_shift_nr": "352"},
+        )
+        url = self.cash_up_url("airtime")
+        query = f"?date={self.business_date.isoformat()}&shift=Night"
+        payload = {
+            "business_date": self.business_date.isoformat(),
+            "shift_label": "Night",
+            "airtime_count": "2",
+            "airtime_shift_nr": "353",
+            "airtime_shift_nr_2": "355",
+            "airtime_slip_1": "10.00",
+            "airtime_system_1": "10.00",
+            "airtime_loaded_1": "0.00",
+            "airtime_slip_2": "5.00",
+            "airtime_system_2": "5.00",
+            "airtime_loaded_2": "0.00",
+            "save_mode": "continue",
+        }
+        self.assertContains(self.client.get(url, self.cash_up_query()), 'name="airtime_shift_nr"')
+        response = self.client.post(url + query, payload)
+        self.assertEqual(response.status_code, 200)
+        payload["airtime_sequence_confirmed"] = "1"
+        self.assertEqual(self.client.post(url + query, payload).status_code, 302)
+        self.assertTrue(AirtimeSequenceAlert.objects.filter(card_index=2).exists())
+
+        delete_card_payload = {
+            "business_date": self.business_date.isoformat(),
+            "shift_label": "Night",
+            "airtime_count": "1",
+            "airtime_shift_nr": "353",
+            "airtime_slip_1": "10.00",
+            "airtime_system_1": "10.00",
+            "airtime_loaded_1": "0.00",
+            "save_mode": "continue",
+        }
+        self.assertEqual(self.client.post(url + query, delete_card_payload).status_code, 302)
+        record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
+        self.assertEqual(record.values["airtime_count"], 1)
+        self.assertEqual(record.values["airtime_shift_nr"], "353")
+        self.assertNotIn("airtime_shift_nr_2", record.values)
+        self.assertNotIn("airtime_slip_2", record.values)
+        self.assertFalse(AirtimeSequenceAlert.objects.filter(cash_up_record=record).exists())
+
     def test_non_airtime_tab_skips_airtime_history_lookup(self):
         with patch("ledger.views._previous_airtime_balance") as airtime_balance_lookup:
             response = self.client.get(self.cash_up_url("cash"), self.cash_up_query())
@@ -2257,6 +2307,9 @@ class CashUpWorkflowTests(TestCase):
         self.assertContains(response, 'name="airtime_shift_nr_2"')
         self.assertContains(response, 'name="airtime_slip_2"')
         self.assertEqual(response.content.decode().count("data-airtime-difference"), 2)
+        remove_buttons = re.findall(r'<button class="remove-repeat-row"[^>]*>', response.content.decode())
+        self.assertEqual(len(remove_buttons), 2)
+        self.assertTrue(all("disabled" not in button for button in remove_buttons))
         self.assertContains(response, "2.00")
         self.assertContains(response, "-1.00")
 
