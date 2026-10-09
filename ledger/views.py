@@ -630,15 +630,31 @@ def fuel_reports(request, slug):
 			product_colors[key] = product_color_names[len(product_colors) % len(product_color_names)]
 		return product_colors[key]
 
-	tank_balances = {
-		tank.pk: {
-			"tank": tank,
-			"product_color": product_color(tank.product),
-			"balance": None,
-			"business_date": None,
+	tank_balances = {}
+	if use_tank_readings:
+		tank_balances = {
+			tank.pk: {
+				"tank": tank,
+				"product_color": product_color(tank.product),
+				"balance": None,
+				"business_date": None,
+			}
+			for tank in site.tanks.all()
 		}
-		for tank in site.tanks.all()
-	} if use_tank_readings else {}
+		latest_tank_readings = TankDipReading.objects.filter(
+			tank__site=site,
+			daily_reading__business_date__lte=report_end,
+		).select_related("tank", "daily_reading").order_by(
+			"tank_id",
+			"-daily_reading__business_date",
+			"-daily_reading_id",
+		).distinct("tank_id")
+		for tank_reading in latest_tank_readings:
+			balance_row = tank_balances[tank_reading.tank_id]
+			balance_row.update({
+				"balance": tank_reading.dip_litres,
+				"business_date": tank_reading.daily_reading.business_date,
+			})
 
 	def fresh_product(name):
 		return {
@@ -670,11 +686,6 @@ def fuel_reports(request, slug):
 				previous = last_tank_dips.get(tank_reading.tank_id)
 				if in_period:
 					product = current_product(tank_reading.tank.product)
-					balance_row = tank_balances[tank_reading.tank_id]
-					balance_row.update({
-						"balance": tank_reading.dip_litres,
-						"business_date": reading.business_date,
-					})
 					movement_key = (reading.business_date, reading.shift_label, tank_reading.tank_id)
 					booked_in = booked_in_by_tank.get(movement_key, Decimal("0"))
 					transfer_in = transferred_in_by_tank.get(movement_key, Decimal("0"))
@@ -738,6 +749,10 @@ def fuel_reports(request, slug):
 			row.update({"business_date": reading.business_date, "shift": reading.shift_label})
 			detail_rows.append(row)
 
+	detail_rows.sort(
+		key=lambda row: (row["business_date"], shift_order.get(row["shift"], -1)),
+		reverse=True,
+	)
 	product_rows = []
 	for product in sorted(period_products.values(), key=lambda row: row["product"].casefold()):
 		product_rows.append(_fuel_report_display_row(product))

@@ -1139,6 +1139,37 @@ class DailyFuelReadingWorkflowTests(TestCase):
             403,
         )
 
+    def test_tank_balance_carries_forward_until_a_newer_reading_is_saved(self):
+        report_date = timezone.localdate()
+        previous_date = report_date - timedelta(days=1)
+        previous = DailyFuelReading.objects.create(
+            site=self.site,
+            business_date=previous_date,
+            shift_label="Night",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TankDipReading.objects.create(daily_reading=previous, tank=self.tank, dip_litres="8500.00")
+
+        report_url = reverse("fuel-reports", args=[self.site.slug])
+        report = self.client.get(report_url, {"period": "day", "from_date": report_date.isoformat()})
+        balance_row = next(row for row in report.context["tank_balances"] if row["tank"] == self.tank)
+        self.assertEqual(balance_row["balance"], Decimal("8500.00"))
+        self.assertEqual(balance_row["business_date"], previous_date)
+
+        current = DailyFuelReading.objects.create(
+            site=self.site,
+            business_date=report_date,
+            shift_label="Day",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TankDipReading.objects.create(daily_reading=current, tank=self.tank, dip_litres="8200.00")
+        updated_report = self.client.get(report_url, {"period": "day", "from_date": report_date.isoformat()})
+        updated_balance = next(row for row in updated_report.context["tank_balances"] if row["tank"] == self.tank)
+        self.assertEqual(updated_balance["balance"], Decimal("8200.00"))
+        self.assertEqual(updated_balance["business_date"], report_date)
+
     def test_configured_shifts_drive_entry_and_reading_history(self):
         self.tank.capacity_litres = "25000.00"
         self.tank.save(update_fields=["capacity_litres"])
@@ -1553,6 +1584,7 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertEqual(report.context["report_end"], self.business_date)
         self.assertEqual(len(report.context["product_rows"]), 2)
         self.assertEqual(len(report.context["detail_rows"]), 4)
+        self.assertEqual([row["shift"] for row in report.context["detail_rows"]], ["Night", "Night", "Day", "Day"])
         self.assertContains(report, "Tank variance")
         self.assertContains(report, "Mechanical variance")
         self.assertContains(report, "Electronic variance")
