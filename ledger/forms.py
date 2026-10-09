@@ -349,15 +349,39 @@ class CashUpEntryForm(forms.Form):
 
 
 class TankReadingForm(SiteReadingForm):
-	def __init__(self, site, *args, initial_readings=None, **kwargs):
+	def __init__(self, site, *args, initial_readings=None, previous_readings=None, opening_readings=None, **kwargs):
 		super().__init__(site, *args, **kwargs)
 		initial_readings = initial_readings or {}
+		previous_readings = previous_readings or {}
+		opening_readings = opening_readings or {}
 		self.tank_fields = []
+		self.opening_field_names = {}
 		for tank in site.tanks.order_by("name"):
 			dip_field_name = f"tank_{tank.pk}_dip"
 			depth_field_name = f"tank_{tank.pk}_depth_cm"
 			capacity_field_name = f"tank_{tank.pk}_capacity_litres"
+			opening_field_name = f"tank_{tank.pk}_opening_dip_litres"
 			previous = initial_readings.get(tank.pk, {})
+			previous_reading = previous_readings.get(tank.pk)
+			opening_reading = opening_readings.get(tank.pk)
+			baseline_value = previous_reading if previous_reading is not None else opening_reading
+			self.fields[opening_field_name] = forms.DecimalField(
+				label="Previous shift reading (L)",
+				required=baseline_value is None,
+				min_value=0,
+				max_digits=12,
+				decimal_places=2,
+				initial=baseline_value,
+				widget=forms.NumberInput(attrs={
+					"min": "0",
+					"step": "0.01",
+					"class": "previous-reading-field",
+					"aria-label": "Previous shift reading",
+					"data-previous-shift-reading": "true",
+					**({"readonly": "readonly", "aria-readonly": "true"} if baseline_value is not None else {}),
+				}),
+			)
+			self.opening_field_names[tank.pk] = opening_field_name
 			self.fields[dip_field_name] = forms.DecimalField(
 				label="Dip reading (L)",
 				min_value=0,
@@ -414,10 +438,12 @@ class NozzleReadingForm(SiteReadingForm):
 	reading_type = ""
 	reading_label = ""
 
-	def __init__(self, site, *args, initial_readings=None, previous_readings=None, **kwargs):
+	def __init__(self, site, *args, initial_readings=None, previous_readings=None, opening_readings=None, **kwargs):
 		super().__init__(site, *args, **kwargs)
 		initial_readings = initial_readings or {}
 		previous_readings = previous_readings or {}
+		opening_readings = opening_readings or {}
+		self.previous_readings = previous_readings
 		nozzles = [
 			(tank, nozzle)
 			for tank in site.tanks.prefetch_related("nozzles").all()
@@ -425,10 +451,31 @@ class NozzleReadingForm(SiteReadingForm):
 		]
 		nozzles.sort(key=lambda row: (_natural_name_key(row[1].name), _natural_name_key(row[0].name)))
 		self.nozzle_fields = []
+		self.opening_field_names = {}
 		for tank, nozzle in nozzles:
 			field_name = f"nozzle_{nozzle.pk}_{self.reading_type}"
+			opening_field_name = f"nozzle_{nozzle.pk}_{self.reading_type}_opening"
 			previous_reading = previous_readings.get(nozzle.pk)
-			minimum_reading = previous_reading if previous_reading is not None else Decimal("0")
+			opening_reading = opening_readings.get(nozzle.pk)
+			baseline_value = previous_reading if previous_reading is not None else opening_reading
+			minimum_reading = baseline_value if baseline_value is not None else Decimal("0")
+			self.fields[opening_field_name] = forms.DecimalField(
+				label="Previous shift reading",
+				required=baseline_value is None,
+				min_value=0,
+				max_digits=14,
+				decimal_places=2,
+				initial=baseline_value,
+				widget=forms.NumberInput(attrs={
+					"min": "0",
+					"step": "0.01",
+					"class": "previous-reading-field",
+					"aria-label": f"Previous {self.reading_label}",
+					"data-previous-shift-reading": "true",
+					**({"readonly": "readonly", "aria-readonly": "true"} if baseline_value is not None else {}),
+				}),
+			)
+			self.opening_field_names[nozzle.pk] = opening_field_name
 			self.fields[field_name] = forms.DecimalField(
 				label=self.reading_label,
 				min_value=minimum_reading,
@@ -446,6 +493,17 @@ class NozzleReadingForm(SiteReadingForm):
 				}),
 			)
 			self.nozzle_fields.append((tank, nozzle, field_name))
+
+	def clean(self):
+		cleaned = super().clean()
+		for _, nozzle, field_name in self.nozzle_fields:
+			if nozzle.pk in self.previous_readings or self.fields[self.opening_field_names[nozzle.pk]].widget.attrs.get("readonly"):
+				continue
+			opening_value = cleaned.get(self.opening_field_names[nozzle.pk])
+			current_value = cleaned.get(field_name)
+			if opening_value is not None and current_value is not None and current_value < opening_value:
+				self.add_error(field_name, "Current reading cannot be below its first reading.")
+		return cleaned
 
 
 class MechanicalReadingForm(NozzleReadingForm):

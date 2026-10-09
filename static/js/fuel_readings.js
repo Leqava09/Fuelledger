@@ -17,6 +17,7 @@
 						: previousValue - currentValue).toFixed(2)
 					: "";
 			};
+			previous.addEventListener("input", updateDifference);
 			current.addEventListener("input", updateDifference);
 			updateDifference();
 		});

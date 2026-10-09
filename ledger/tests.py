@@ -573,6 +573,7 @@ class SiteAccessTests(TestCase):
         self.assertLess(page.content.decode().index("fuel-workflow-actions"), page.content.decode().index('id="book-in-form"'))
         self.assertContains(page, 'data-workflow-draft-key="book-in-fuel"')
         self.assertContains(page, "data-unsaved-return")
+        self.assertGreaterEqual(page.content.decode().count("data-unsaved-return"), 2)
         self.assertContains(
             page,
             f"{reverse('site-form-history', args=[self.site_one.slug, 'book-in-fuel'])}?date={selected_date.isoformat()}&amp;shift=Day",
@@ -704,6 +705,7 @@ class SiteAccessTests(TestCase):
         self.assertNotContains(page, "Save this form")
         self.assertContains(page, 'data-workflow-draft-key="transfer-fuel"')
         self.assertContains(page, "data-unsaved-return")
+        self.assertGreaterEqual(page.content.decode().count("data-unsaved-return"), 2)
 
         invalid = self.client.post(f"{url}?date={selected_date.isoformat()}&shift=Night", {
             "business_date": selected_date.isoformat(),
@@ -1066,6 +1068,7 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertContains(response, "Save and Exit")
         self.assertContains(response, 'data-workflow-draft-key="tank-reading"')
         self.assertContains(response, "data-unsaved-return")
+        self.assertGreaterEqual(response.content.decode().count("data-unsaved-return"), 6)
         self.assertLess(response.content.decode().index("fuel-workflow-actions"), response.content.decode().index("fuel-reading-tabs"))
         page_html = response.content.decode()
         tab_html = page_html[page_html.index('class="fuel-reading-tabs"'):]
@@ -1201,8 +1204,10 @@ class DailyFuelReadingWorkflowTests(TestCase):
         tank_response = self.client.post(tank_post_url, {
             "business_date": self.business_date.isoformat(),
             "shift_label": "Night",
+            f"tank_{self.tank.pk}_opening_dip_litres": "1300.00",
             f"tank_{self.tank.pk}_dip": "1234.50",
             f"tank_{self.tank.pk}_depth_cm": "112.25",
+            f"tank_{self.tank_two.pk}_opening_dip_litres": "1000.00",
             f"tank_{self.tank_two.pk}_dip": "987.65",
             f"tank_{self.tank_two.pk}_depth_cm": "88.50",
             "save_mode": "continue",
@@ -1273,7 +1278,9 @@ class DailyFuelReadingWorkflowTests(TestCase):
             "business_date": self.business_date.isoformat(),
             "shift_label": "Night",
             "save_mode": "continue",
+            f"nozzle_{self.nozzle.pk}_mechanical_opening": "100.00",
             f"nozzle_{self.nozzle.pk}_mechanical": "234.56",
+            f"nozzle_{self.nozzle_two.pk}_mechanical_opening": "200.00",
             f"nozzle_{self.nozzle_two.pk}_mechanical": "456.78",
         })
         self.assertRedirects(mechanical_response, f"{mechanical_post_url}&workflow_saved=mechanical-readings", fetch_redirect_response=False)
@@ -1289,7 +1296,9 @@ class DailyFuelReadingWorkflowTests(TestCase):
             "business_date": self.business_date.isoformat(),
             "shift_label": "Night",
             "save_mode": "continue",
+            f"nozzle_{self.nozzle.pk}_electronic_opening": "300.00",
             f"nozzle_{self.nozzle.pk}_electronic": "345.67",
+            f"nozzle_{self.nozzle_two.pk}_electronic_opening": "400.00",
             f"nozzle_{self.nozzle_two.pk}_electronic": "567.89",
         })
         self.assertRedirects(electronic_response, f"{electronic_post_url}&workflow_saved=electronic-readings", fetch_redirect_response=False)
@@ -1319,6 +1328,75 @@ class DailyFuelReadingWorkflowTests(TestCase):
             html = response.content.decode()
             positions = [html.index(f">{name}</td>") for name in ("Nozzle 1", "Nozzle 2", "Nozzle 3", "Nozzle 10")]
             self.assertEqual(positions, sorted(positions))
+
+    def test_first_site_shift_can_enter_opening_values_for_all_fuel_readings(self):
+        tank_url = reverse("fuel-reading-entry", args=[self.site.slug, "tank-reading"])
+        mechanical_url = reverse("fuel-reading-entry", args=[self.site.slug, "mechanical-readings"])
+        electronic_url = reverse("fuel-reading-entry", args=[self.site.slug, "electronic-readings"])
+        entry_query = {"date": self.business_date.isoformat(), "shift": "Day"}
+
+        tank_page = self.client.get(tank_url, entry_query)
+        mechanical_page = self.client.get(mechanical_url, entry_query)
+        electronic_page = self.client.get(electronic_url, entry_query)
+        self.assertNotIn("readonly", tank_page.context["form"].fields[f"tank_{self.tank.pk}_opening_dip_litres"].widget.attrs)
+        self.assertNotIn("readonly", mechanical_page.context["form"].fields[f"nozzle_{self.nozzle.pk}_mechanical_opening"].widget.attrs)
+        self.assertNotIn("readonly", electronic_page.context["form"].fields[f"nozzle_{self.nozzle.pk}_electronic_opening"].widget.attrs)
+
+        tank_response = self.client.post(tank_url + f"?date={self.business_date.isoformat()}&shift=Day", {
+            "business_date": self.business_date.isoformat(),
+            "shift_label": "Day",
+            f"tank_{self.tank.pk}_opening_dip_litres": "900.00",
+            f"tank_{self.tank.pk}_dip": "850.00",
+            f"tank_{self.tank.pk}_depth_cm": "80.00",
+            f"tank_{self.tank_two.pk}_opening_dip_litres": "1100.00",
+            f"tank_{self.tank_two.pk}_dip": "1000.00",
+            f"tank_{self.tank_two.pk}_depth_cm": "90.00",
+        })
+        self.assertEqual(tank_response.status_code, 302)
+
+        mechanical_response = self.client.post(mechanical_url + f"?date={self.business_date.isoformat()}&shift=Day", {
+            "business_date": self.business_date.isoformat(),
+            "shift_label": "Day",
+            f"nozzle_{self.nozzle.pk}_mechanical_opening": "1000.00",
+            f"nozzle_{self.nozzle.pk}_mechanical": "1050.00",
+            f"nozzle_{self.nozzle_two.pk}_mechanical_opening": "2000.00",
+            f"nozzle_{self.nozzle_two.pk}_mechanical": "2050.00",
+        })
+        self.assertEqual(mechanical_response.status_code, 302)
+
+        electronic_response = self.client.post(electronic_url + f"?date={self.business_date.isoformat()}&shift=Day", {
+            "business_date": self.business_date.isoformat(),
+            "shift_label": "Day",
+            f"nozzle_{self.nozzle.pk}_electronic_opening": "300.00",
+            f"nozzle_{self.nozzle.pk}_electronic": "350.00",
+            f"nozzle_{self.nozzle_two.pk}_electronic_opening": "400.00",
+            f"nozzle_{self.nozzle_two.pk}_electronic": "450.00",
+        })
+        self.assertEqual(electronic_response.status_code, 302)
+
+        reading = DailyFuelReading.objects.get(site=self.site, business_date=self.business_date, shift_label="Day")
+        self.assertEqual(reading.tank_readings.get(tank=self.tank).opening_dip_litres, Decimal("900.00"))
+        first_nozzle = reading.nozzle_readings.get(nozzle=self.nozzle)
+        self.assertEqual(first_nozzle.mechanical_opening_reading, Decimal("1000.00"))
+        self.assertEqual(first_nozzle.electronic_opening_reading, Decimal("300.00"))
+
+        next_shift_query = {"date": self.business_date.isoformat(), "shift": "Night"}
+        next_tank_page = self.client.get(tank_url, next_shift_query)
+        next_mechanical_page = self.client.get(mechanical_url, next_shift_query)
+        next_electronic_page = self.client.get(electronic_url, next_shift_query)
+        self.assertIn("readonly", next_tank_page.context["form"].fields[f"tank_{self.tank.pk}_opening_dip_litres"].widget.attrs)
+        self.assertIn("readonly", next_mechanical_page.context["form"].fields[f"nozzle_{self.nozzle.pk}_mechanical_opening"].widget.attrs)
+        self.assertIn("readonly", next_electronic_page.context["form"].fields[f"nozzle_{self.nozzle.pk}_electronic_opening"].widget.attrs)
+
+        report = self.client.get(reverse("fuel-reports", args=[self.site.slug]), {
+            "period": "day",
+            "from_date": self.business_date.isoformat(),
+            "shift": "Day",
+        })
+        diesel = next(row for row in report.context["product_rows"] if row["product"] == "Diesel")
+        self.assertEqual(diesel["tank_decrease"], Decimal("50.00"))
+        self.assertEqual(diesel["mechanical"], Decimal("50.00"))
+        self.assertEqual(diesel["electronic"], Decimal("50.00"))
 
     def test_fuel_readings_show_previous_shift_values_and_differences(self):
         self.site.shift_count = 3
@@ -1368,7 +1446,9 @@ class DailyFuelReadingWorkflowTests(TestCase):
 
         tank_url = reverse("fuel-reading-entry", args=[self.site.slug, "tank-reading"])
         tank_page = self.client.get(tank_url, {"date": self.business_date.isoformat(), "shift": "Morning"})
-        self.assertContains(tank_page, 'value="800.00" readonly class="previous-reading-field"')
+        self.assertContains(tank_page, f'name="tank_{self.tank.pk}_opening_dip_litres"')
+        self.assertContains(tank_page, 'value="800.00"')
+        self.assertContains(tank_page, 'readonly="readonly" aria-readonly="true"')
         self.assertContains(tank_page, 'value="-100.00" readonly class="reading-difference-field"')
         self.assertContains(tank_page, 'name="tank_')
 

@@ -691,8 +691,11 @@ def fuel_reports(request, slug):
 					transfer_in = transferred_in_by_tank.get(movement_key, Decimal("0"))
 					transfer_out = transferred_out_by_tank.get(movement_key, Decimal("0"))
 					product["booked_in"] += booked_in
-					if previous is not None and previous[0] == key:
-						product["tank_decrease"] += previous[1] - tank_reading.dip_litres + booked_in + transfer_in - transfer_out
+					previous_dip = previous[1] if previous is not None and previous[0] == key else None
+					if previous_dip is None:
+						previous_dip = tank_reading.opening_dip_litres
+					if previous_dip is not None:
+						product["tank_decrease"] += previous_dip - tank_reading.dip_litres + booked_in + transfer_in - transfer_out
 						product["has_tank"] = True
 				last_tank_dips[tank_reading.tank_id] = (key, tank_reading.dip_litres)
 
@@ -716,8 +719,11 @@ def fuel_reports(request, slug):
 					product = current_product(product_name)
 					for reading_field, total_field, has_field in selected_nozzle_sources:
 						current_value = getattr(nozzle_reading, reading_field)
-						previous_value = previous.get(reading_field)
-						if current_value is not None and previous_value is not None and previous.get("product") == key:
+						previous_value = previous.get(reading_field) if previous.get("product") == key else None
+						if previous_value is None:
+							opening_field = "mechanical_opening_reading" if reading_field == "mechanical_reading" else "electronic_opening_reading"
+							previous_value = getattr(nozzle_reading, opening_field)
+						if current_value is not None and previous_value is not None:
 							product[total_field] += current_value - previous_value
 							product[has_field] = True
 				for reading_field, _, _ in selected_nozzle_sources:
@@ -1336,13 +1342,21 @@ def fuel_reading_entry(request, slug, reading_type):
 				for item in previous_reading.nozzle_readings.all()
 				if getattr(item, previous_field) is not None
 			}
+	previous_tank_values = {}
 	initial_tank_readings = {}
+	opening_tank_readings = {}
 	initial_nozzle_readings = {}
+	opening_nozzle_readings = {}
 	existing_nozzle_readings = {}
 	if reading:
 		initial_tank_readings = {
 			item.tank_id: {"dip_litres": item.dip_litres, "depth_cm": item.depth_cm}
 			for item in reading.tank_readings.all()
+		}
+		opening_tank_readings = {
+			item.tank_id: item.opening_dip_litres
+			for item in reading.tank_readings.all()
+			if item.opening_dip_litres is not None
 		}
 		existing_nozzle_readings = {
 			item.nozzle_id: item
@@ -1350,11 +1364,26 @@ def fuel_reading_entry(request, slug, reading_type):
 		}
 		if reading_type in {"mechanical-readings", "electronic-readings"}:
 			reading_type_field = "mechanical_reading" if reading_type == "mechanical-readings" else "electronic_reading"
+			opening_field = "mechanical_opening_reading" if reading_type == "mechanical-readings" else "electronic_opening_reading"
 			initial_nozzle_readings = {
 				nozzle_id: getattr(item, reading_type_field)
 				for nozzle_id, item in existing_nozzle_readings.items()
 				if getattr(item, reading_type_field) is not None
 			}
+			opening_nozzle_readings = {
+				nozzle_id: getattr(item, opening_field)
+				for nozzle_id, item in existing_nozzle_readings.items()
+				if getattr(item, opening_field) is not None
+			}
+	previous_tank_values = {
+		tank_id: dip_litres
+		for tank_id, (product, dip_litres) in previous_tank_readings.items()
+		if any(tank.pk == tank_id and product.strip().casefold() == tank.product.strip().casefold() for tank in tanks)
+	}
+	for tank_id, opening_reading in opening_tank_readings.items():
+		previous_tank_values.setdefault(tank_id, opening_reading)
+	for nozzle_id, opening_reading in opening_nozzle_readings.items():
+		previous_nozzle_readings.setdefault(nozzle_id, opening_reading)
 	initial = {"business_date": selected_date, "shift_label": shift_label}
 	form_class = {
 		"tank-reading": TankReadingForm,
@@ -1377,7 +1406,8 @@ def fuel_reading_entry(request, slug, reading_type):
 			data=request.POST if request.method == "POST" else None,
 			initial=initial,
 			initial_readings=initial_tank_readings if reading_type == "tank-reading" else initial_nozzle_readings,
-			**({"previous_readings": previous_nozzle_readings} if reading_type in {"mechanical-readings", "electronic-readings"} else {}),
+			previous_readings=previous_tank_values if reading_type == "tank-reading" else previous_nozzle_readings,
+			opening_readings=opening_tank_readings if reading_type == "tank-reading" else opening_nozzle_readings,
 		)
 	if request.method == "POST" and form.is_valid():
 		fields = form.tank_fields if reading_type == "tank-reading" else form.product_fields if reading_type == "fuel-sales" else form.nozzle_fields
@@ -1388,6 +1418,7 @@ def fuel_reading_entry(request, slug, reading_type):
 			if reading_type == "tank-reading":
 				before = {
 					str(item.tank_id): {
+						"opening_dip_litres": str(item.opening_dip_litres) if item.opening_dip_litres is not None else None,
 						"dip_litres": str(item.dip_litres),
 						"depth_cm": str(item.depth_cm) if item.depth_cm is not None else None,
 					}
@@ -1416,13 +1447,17 @@ def fuel_reading_entry(request, slug, reading_type):
 					reading.save(update_fields=["updated_by", "updated_at"])
 				if reading_type == "tank-reading":
 					for tank, dip_field_name, depth_field_name, capacity_field_name in form.tank_fields:
+						defaults = {
+							"dip_litres": form.cleaned_data[dip_field_name],
+							"depth_cm": form.cleaned_data[depth_field_name],
+						}
+						if tank.pk not in previous_tank_values:
+							opening_field_name = form.opening_field_names[tank.pk]
+							defaults["opening_dip_litres"] = form.cleaned_data[opening_field_name]
 						TankDipReading.objects.update_or_create(
 							daily_reading=reading,
 							tank=tank,
-							defaults={
-								"dip_litres": form.cleaned_data[dip_field_name],
-								"depth_cm": form.cleaned_data[depth_field_name],
-							},
+							defaults=defaults,
 						)
 				elif reading_type == "fuel-sales":
 					reading.fuel_sales = {
@@ -1432,6 +1467,7 @@ def fuel_reading_entry(request, slug, reading_type):
 					reading.save(update_fields=["fuel_sales", "updated_by", "updated_at"])
 				else:
 					field_name = "mechanical_reading" if reading_type == "mechanical-readings" else "electronic_reading"
+					opening_field = "mechanical_opening_reading" if field_name == "mechanical_reading" else "electronic_opening_reading"
 					other_field = "electronic_reading" if field_name == "mechanical_reading" else "mechanical_reading"
 					for tank, nozzle, form_field in form.nozzle_fields:
 						previous = existing_nozzle_readings.get(nozzle.pk)
@@ -1439,6 +1475,9 @@ def fuel_reading_entry(request, slug, reading_type):
 							field_name: form.cleaned_data[form_field],
 							other_field: getattr(previous, other_field) if previous else None,
 						}
+						if nozzle.pk not in previous_nozzle_readings:
+							baseline_form_field = form.opening_field_names[nozzle.pk]
+							defaults[opening_field] = form.cleaned_data[baseline_form_field]
 						NozzleFuelReading.objects.update_or_create(
 							daily_reading=reading,
 							nozzle=nozzle,
@@ -1447,6 +1486,7 @@ def fuel_reading_entry(request, slug, reading_type):
 			if reading_type == "tank-reading":
 				after = {
 					str(item.tank_id): {
+						"opening_dip_litres": str(item.opening_dip_litres) if item.opening_dip_litres is not None else None,
 						"dip_litres": str(item.dip_litres),
 						"depth_cm": str(item.depth_cm) if item.depth_cm is not None else None,
 					}
@@ -1455,8 +1495,12 @@ def fuel_reading_entry(request, slug, reading_type):
 			elif reading_type == "fuel-sales":
 				after = dict(reading.fuel_sales)
 			else:
+				opening_field = "mechanical_opening_reading" if field_name == "mechanical_reading" else "electronic_opening_reading"
 				after = {
-					str(item.nozzle_id): str(getattr(item, field_name))
+					str(item.nozzle_id): {
+						"opening_reading": str(getattr(item, opening_field)) if getattr(item, opening_field) is not None else None,
+						"reading": str(getattr(item, field_name)),
+					}
 					for item in reading.nozzle_readings.all()
 					if getattr(item, field_name) is not None
 				}
@@ -1494,15 +1538,12 @@ def fuel_reading_entry(request, slug, reading_type):
 				"dip": form[dip_field_name],
 				"depth": form[depth_field_name],
 				"capacity": form[capacity_field_name],
-				"previous": previous_tank_readings.get(tank.pk, (None, None))[1]
-				if previous_tank_readings.get(tank.pk, (None, None))[0] is not None
-				and previous_tank_readings[tank.pk][0].strip().casefold() == tank.product.strip().casefold()
-				else None,
+				"previous": previous_tank_values.get(tank.pk),
+				"opening": form[form.opening_field_names[tank.pk]],
 				"difference": _tank_reading_difference(
-					previous_tank_readings.get(tank.pk, (None, None))[1]
-					if previous_tank_readings.get(tank.pk, (None, None))[0] is not None
-					and previous_tank_readings[tank.pk][0].strip().casefold() == tank.product.strip().casefold()
-					else None,
+					previous_tank_values.get(tank.pk)
+					if previous_tank_values.get(tank.pk) is not None
+					else form[form.opening_field_names[tank.pk]].value(),
 					form[dip_field_name].value(),
 				),
 			}
@@ -1517,7 +1558,13 @@ def fuel_reading_entry(request, slug, reading_type):
 				"nozzle": nozzle,
 				"reading": form[field_name],
 				"previous": previous_nozzle_readings.get(nozzle.pk),
-				"difference": _fuel_reading_difference(previous_nozzle_readings.get(nozzle.pk), form[field_name].value()),
+				"opening": form[form.opening_field_names[nozzle.pk]],
+				"difference": _fuel_reading_difference(
+					previous_nozzle_readings.get(nozzle.pk)
+					if previous_nozzle_readings.get(nozzle.pk) is not None
+					else form[form.opening_field_names[nozzle.pk]].value(),
+					form[field_name].value(),
+				),
 			}
 			for tank, nozzle, field_name in form.nozzle_fields
 		]

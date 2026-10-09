@@ -360,6 +360,7 @@ class DailyFuelReading(models.Model):
 class TankDipReading(models.Model):
 	daily_reading = models.ForeignKey(DailyFuelReading, on_delete=models.CASCADE, related_name="tank_readings")
 	tank = models.ForeignKey(Tank, on_delete=models.PROTECT, related_name="dip_readings")
+	opening_dip_litres = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
 	dip_litres = models.DecimalField(max_digits=12, decimal_places=2)
 	depth_cm = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, verbose_name="Depth (cm)")
 
@@ -372,7 +373,9 @@ class TankDipReading(models.Model):
 class NozzleFuelReading(models.Model):
 	daily_reading = models.ForeignKey(DailyFuelReading, on_delete=models.CASCADE, related_name="nozzle_readings")
 	nozzle = models.ForeignKey(Nozzle, on_delete=models.PROTECT, related_name="daily_readings")
+	mechanical_opening_reading = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
 	mechanical_reading = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+	electronic_opening_reading = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
 	electronic_reading = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
 
 	class Meta:
