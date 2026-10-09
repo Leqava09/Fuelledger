@@ -38,6 +38,10 @@ class Site(models.Model):
 		default=1,
 		verbose_name="Amount of shifts",
 	)
+	use_tank_readings = models.BooleanField(default=True, verbose_name="Tank Reading")
+	use_fuel_sales = models.BooleanField(default=True, verbose_name="Fuel Sales")
+	use_mechanical_readings = models.BooleanField(default=True, verbose_name="Mechanical Readings")
+	use_electronic_readings = models.BooleanField(default=True, verbose_name="Electronic Readings")
 	is_active = models.BooleanField(default=True)
 	created_at = models.DateTimeField(auto_now_add=True)
 

@@ -48,15 +48,15 @@
     {% if product_rows %}
     <div class="table-wrap fuel-report-table-wrap">
         <table class="fuel-report-table">
-            <thead><tr><th>Product</th><th>Tank decrease</th><th>Fuel Sales</th><th>Tank - Sales</th><th>Mechanical</th><th>Electronic</th><th>Mechanical - Sales</th><th>Electronic - Sales</th><th>Mechanical - Electronic</th><th>Tank - Mechanical</th><th>Tank - Electronic</th></tr></thead>
+            <thead><tr><th>Product</th>{% if use_tank_readings %}<th>Tank decrease</th>{% endif %}{% if use_fuel_sales %}<th>Fuel Sales</th>{% endif %}{% if use_tank_readings and use_fuel_sales %}<th>Tank - Sales</th>{% endif %}{% if use_mechanical_readings %}<th>Mechanical</th>{% endif %}{% if use_electronic_readings %}<th>Electronic</th>{% endif %}{% if use_mechanical_readings and use_fuel_sales %}<th>Mechanical - Sales</th>{% endif %}{% if use_electronic_readings and use_fuel_sales %}<th>Electronic - Sales</th>{% endif %}{% if use_mechanical_readings and use_electronic_readings %}<th>Mechanical - Electronic</th>{% endif %}{% if use_tank_readings and use_mechanical_readings %}<th>Tank - Mechanical</th>{% endif %}{% if use_tank_readings and use_electronic_readings %}<th>Tank - Electronic</th>{% endif %}</tr></thead>
             <tbody>
                 {% for row in product_rows %}
                 <tr>
                     <td>{{ row.product }}</td>
-                    <td>{{ row.tank_decrease|floatformat:2 }}</td><td>{{ row.fuel_sales|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.tank_vs_sales|floatformat:2 }}</td>
-                    <td>{{ row.mechanical|floatformat:2 }}</td><td>{{ row.electronic|floatformat:2 }}</td>
-                    <td class="fuel-report-difference">{{ row.mechanical_vs_sales|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.electronic_vs_sales|floatformat:2 }}</td>
-                    <td class="fuel-report-difference">{{ row.mechanical_vs_electronic|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.tank_vs_mechanical|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.tank_vs_electronic|floatformat:2 }}</td>
+                    {% if use_tank_readings %}<td>{{ row.tank_decrease|floatformat:2 }}</td>{% endif %}{% if use_fuel_sales %}<td>{{ row.fuel_sales|floatformat:2 }}</td>{% endif %}{% if use_tank_readings and use_fuel_sales %}<td class="fuel-report-difference">{{ row.tank_vs_sales|floatformat:2 }}</td>{% endif %}
+                    {% if use_mechanical_readings %}<td>{{ row.mechanical|floatformat:2 }}</td>{% endif %}{% if use_electronic_readings %}<td>{{ row.electronic|floatformat:2 }}</td>{% endif %}
+                    {% if use_mechanical_readings and use_fuel_sales %}<td class="fuel-report-difference">{{ row.mechanical_vs_sales|floatformat:2 }}</td>{% endif %}{% if use_electronic_readings and use_fuel_sales %}<td class="fuel-report-difference">{{ row.electronic_vs_sales|floatformat:2 }}</td>{% endif %}
+                    {% if use_mechanical_readings and use_electronic_readings %}<td class="fuel-report-difference">{{ row.mechanical_vs_electronic|floatformat:2 }}</td>{% endif %}{% if use_tank_readings and use_mechanical_readings %}<td class="fuel-report-difference">{{ row.tank_vs_mechanical|floatformat:2 }}</td>{% endif %}{% if use_tank_readings and use_electronic_readings %}<td class="fuel-report-difference">{{ row.tank_vs_electronic|floatformat:2 }}</td>{% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
@@ -69,15 +69,15 @@
     {% if detail_rows %}
     <div class="table-wrap fuel-report-table-wrap">
         <table class="fuel-report-table">
-            <thead><tr><th>Date</th><th>Shift</th><th>Product</th><th>Tank decrease</th><th>Fuel Sales</th><th>Tank - Sales</th><th>Mechanical</th><th>Electronic</th><th>Mechanical - Sales</th><th>Electronic - Sales</th><th>Mechanical - Electronic</th><th>Tank - Mechanical</th><th>Tank - Electronic</th></tr></thead>
+            <thead><tr><th>Date</th><th>Shift</th><th>Product</th>{% if use_tank_readings %}<th>Tank decrease</th>{% endif %}{% if use_fuel_sales %}<th>Fuel Sales</th>{% endif %}{% if use_tank_readings and use_fuel_sales %}<th>Tank - Sales</th>{% endif %}{% if use_mechanical_readings %}<th>Mechanical</th>{% endif %}{% if use_electronic_readings %}<th>Electronic</th>{% endif %}{% if use_mechanical_readings and use_fuel_sales %}<th>Mechanical - Sales</th>{% endif %}{% if use_electronic_readings and use_fuel_sales %}<th>Electronic - Sales</th>{% endif %}{% if use_mechanical_readings and use_electronic_readings %}<th>Mechanical - Electronic</th>{% endif %}{% if use_tank_readings and use_mechanical_readings %}<th>Tank - Mechanical</th>{% endif %}{% if use_tank_readings and use_electronic_readings %}<th>Tank - Electronic</th>{% endif %}</tr></thead>
             <tbody>
                 {% for row in detail_rows %}
                 <tr>
                     <td>{{ row.business_date|date:"d M Y" }}</td><td>{{ row.shift }}</td><td>{{ row.product }}</td>
-                    <td>{{ row.tank_decrease|floatformat:2 }}</td><td>{{ row.fuel_sales|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.tank_vs_sales|floatformat:2 }}</td>
-                    <td>{{ row.mechanical|floatformat:2 }}</td><td>{{ row.electronic|floatformat:2 }}</td>
-                    <td class="fuel-report-difference">{{ row.mechanical_vs_sales|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.electronic_vs_sales|floatformat:2 }}</td>
-                    <td class="fuel-report-difference">{{ row.mechanical_vs_electronic|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.tank_vs_mechanical|floatformat:2 }}</td><td class="fuel-report-difference">{{ row.tank_vs_electronic|floatformat:2 }}</td>
+                    {% if use_tank_readings %}<td>{{ row.tank_decrease|floatformat:2 }}</td>{% endif %}{% if use_fuel_sales %}<td>{{ row.fuel_sales|floatformat:2 }}</td>{% endif %}{% if use_tank_readings and use_fuel_sales %}<td class="fuel-report-difference">{{ row.tank_vs_sales|floatformat:2 }}</td>{% endif %}
+                    {% if use_mechanical_readings %}<td>{{ row.mechanical|floatformat:2 }}</td>{% endif %}{% if use_electronic_readings %}<td>{{ row.electronic|floatformat:2 }}</td>{% endif %}
+                    {% if use_mechanical_readings and use_fuel_sales %}<td class="fuel-report-difference">{{ row.mechanical_vs_sales|floatformat:2 }}</td>{% endif %}{% if use_electronic_readings and use_fuel_sales %}<td class="fuel-report-difference">{{ row.electronic_vs_sales|floatformat:2 }}</td>{% endif %}
+                    {% if use_mechanical_readings and use_electronic_readings %}<td class="fuel-report-difference">{{ row.mechanical_vs_electronic|floatformat:2 }}</td>{% endif %}{% if use_tank_readings and use_mechanical_readings %}<td class="fuel-report-difference">{{ row.tank_vs_mechanical|floatformat:2 }}</td>{% endif %}{% if use_tank_readings and use_electronic_readings %}<td class="fuel-report-difference">{{ row.tank_vs_electronic|floatformat:2 }}</td>{% endif %}
                 </tr>
                 {% endfor %}
             </tbody>

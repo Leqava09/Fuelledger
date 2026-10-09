@@ -602,6 +602,7 @@ class SiteAdmin(nested_admin.NestedModelAdmin):
 		("Site details", {"fields": ("name", "currency", "image", "is_active")}),
 		("Contact Details", {"fields": ("manager_name", "contact_number", "contact_email")}),
 		("Shifts", {"fields": ("shift_count",)}),
+		("Readings used by site", {"fields": ("use_tank_readings", "use_fuel_sales", "use_mechanical_readings", "use_electronic_readings")}),
 		("Address", {"fields": ("address",)}),
 	)
 
@@ -632,10 +633,10 @@ class SiteAdmin(nested_admin.NestedModelAdmin):
 		before = {}
 		if change:
 			original = Site.objects.get(pk=obj.pk)
-			tracked_fields = ("name", "currency", "image", "address", "contact_number", "contact_email", "manager_name", "shift_count", "is_active")
+			tracked_fields = ("name", "currency", "image", "address", "contact_number", "contact_email", "manager_name", "shift_count", "use_tank_readings", "use_fuel_sales", "use_mechanical_readings", "use_electronic_readings", "is_active")
 			before = {name: str(getattr(original, name)) for name in tracked_fields}
 		super().save_model(request, obj, form, change)
-		after = {name: str(getattr(obj, name)) for name in ("name", "currency", "image", "address", "contact_number", "contact_email", "manager_name", "shift_count", "is_active")}
+		after = {name: str(getattr(obj, name)) for name in ("name", "currency", "image", "address", "contact_number", "contact_email", "manager_name", "shift_count", "use_tank_readings", "use_fuel_sales", "use_mechanical_readings", "use_electronic_readings", "is_active")}
 		if not change or form.changed_data:
 			_record_admin_audit(obj, request.user, "Site", obj.name, "changed" if change else "created", before, after)
 

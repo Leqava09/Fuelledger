@@ -117,8 +117,25 @@ def _can_access_site_form(user, site, form_key):
 		form_key = "tank-reading"
 	permissions = _site_form_permissions(user, site)
 	if form_key == "daily-fuel-readings":
-		return any(key in permissions for key in FUEL_READING_FORM_LABELS)
+		return any(
+			_site_uses_fuel_reading(site, key)
+			and (key in permissions or (key == "fuel-sales" and "tank-reading" in permissions))
+			for key in FUEL_READING_FORM_LABELS
+		)
 	return form_key in permissions
+
+
+def _site_uses_fuel_reading(site, reading_type):
+	return getattr(site, {
+		"tank-reading": "use_tank_readings",
+		"fuel-sales": "use_fuel_sales",
+		"mechanical-readings": "use_mechanical_readings",
+		"electronic-readings": "use_electronic_readings",
+	}[reading_type])
+
+
+def _site_fuel_reading_types(site):
+	return [key for key in FUEL_READING_FORM_LABELS if _site_uses_fuel_reading(site, key)]
 
 
 def _fuel_workflow_redirect(request, site, selected_date, shift_label, form_key, label, save_mode, next_form=None, stay_on_continue=False):
@@ -206,7 +223,8 @@ def site_dashboard(request, slug):
 		"fuel_reading_forms": [
 			{"key": key, "label": label}
 			for key, label in FUEL_READING_FORM_LABELS.items()
-			if key in permissions or (key == "fuel-sales" and "tank-reading" in permissions)
+			if _site_uses_fuel_reading(site, key)
+			and (key in permissions or (key == "fuel-sales" and "tank-reading" in permissions))
 		],
 		"cash_up_tabs": [
 			{"key": key, "label": tab_label}
@@ -509,6 +527,10 @@ def fuel_reports(request, slug):
 	shift_filter = request.GET.get("shift", "all")
 	if shift_filter not in shift_names:
 		shift_filter = "all"
+	use_tank_readings = site.use_tank_readings
+	use_fuel_sales = site.use_fuel_sales
+	use_mechanical_readings = site.use_mechanical_readings
+	use_electronic_readings = site.use_electronic_readings
 	selected_shifts = set(shift_names if shift_filter == "all" else [shift_filter])
 	shift_order = {name: index for index, name in enumerate(shift_names)}
 	readings = list(
@@ -550,43 +572,47 @@ def fuel_reports(request, slug):
 			product_labels.setdefault(key, name.strip())
 			return current_products.setdefault(key, fresh_product(product_labels[key]))
 
-		for tank_reading in reading.tank_readings.select_related("tank"):
-			key = product_key(tank_reading.tank.product)
-			previous = last_tank_dips.get(tank_reading.tank_id)
-			if in_period:
-				product = current_product(tank_reading.tank.product)
-				if previous is not None and previous[0] == key:
-					product["tank_decrease"] += previous[1] - tank_reading.dip_litres
-					product["has_tank"] = True
-			last_tank_dips[tank_reading.tank_id] = (key, tank_reading.dip_litres)
+		if use_tank_readings:
+			for tank_reading in reading.tank_readings.select_related("tank"):
+				key = product_key(tank_reading.tank.product)
+				previous = last_tank_dips.get(tank_reading.tank_id)
+				if in_period:
+					product = current_product(tank_reading.tank.product)
+					if previous is not None and previous[0] == key:
+						product["tank_decrease"] += previous[1] - tank_reading.dip_litres
+						product["has_tank"] = True
+				last_tank_dips[tank_reading.tank_id] = (key, tank_reading.dip_litres)
 
-		if in_period:
+		if in_period and use_fuel_sales:
 			for product_name, litres in (reading.fuel_sales or {}).items():
 				product = current_product(product_name)
 				product["fuel_sales"] += Decimal(str(litres or 0))
 				product["has_sales"] = True
 
-		for nozzle_reading in reading.nozzle_readings.select_related("nozzle__tank"):
-			product_name = nozzle_reading.nozzle.tank.product
-			key = product_key(product_name)
-			previous = last_nozzle_readings.get(nozzle_reading.nozzle_id, {})
-			if in_period:
-				product = current_product(product_name)
-				for reading_field, total_field, has_field in (
-					("mechanical_reading", "mechanical", "has_mechanical"),
-					("electronic_reading", "electronic", "has_electronic"),
-				):
+		if use_mechanical_readings or use_electronic_readings:
+			selected_nozzle_sources = []
+			if use_mechanical_readings:
+				selected_nozzle_sources.append(("mechanical_reading", "mechanical", "has_mechanical"))
+			if use_electronic_readings:
+				selected_nozzle_sources.append(("electronic_reading", "electronic", "has_electronic"))
+			for nozzle_reading in reading.nozzle_readings.select_related("nozzle__tank"):
+				product_name = nozzle_reading.nozzle.tank.product
+				key = product_key(product_name)
+				previous = last_nozzle_readings.get(nozzle_reading.nozzle_id, {})
+				if in_period:
+					product = current_product(product_name)
+					for reading_field, total_field, has_field in selected_nozzle_sources:
+						current_value = getattr(nozzle_reading, reading_field)
+						previous_value = previous.get(reading_field)
+						if current_value is not None and previous_value is not None and previous.get("product") == key:
+							product[total_field] += current_value - previous_value
+							product[has_field] = True
+				for reading_field, _, _ in selected_nozzle_sources:
 					current_value = getattr(nozzle_reading, reading_field)
-					previous_value = previous.get(reading_field)
-					if current_value is not None and previous_value is not None and previous.get("product") == key:
-						product[total_field] += current_value - previous_value
-						product[has_field] = True
-			for reading_field in ("mechanical_reading", "electronic_reading"):
-				current_value = getattr(nozzle_reading, reading_field)
-				if current_value is not None:
-					previous[reading_field] = current_value
-			previous["product"] = key
-			last_nozzle_readings[nozzle_reading.nozzle_id] = previous
+					if current_value is not None:
+						previous[reading_field] = current_value
+				previous["product"] = key
+				last_nozzle_readings[nozzle_reading.nozzle_id] = previous
 
 		if not in_period:
 			continue
@@ -624,6 +650,10 @@ def fuel_reports(request, slug):
 		"today": today,
 		"shift_names": shift_names,
 		"shift_filter": shift_filter,
+		"use_tank_readings": use_tank_readings,
+		"use_fuel_sales": use_fuel_sales,
+		"use_mechanical_readings": use_mechanical_readings,
+		"use_electronic_readings": use_electronic_readings,
 		"product_rows": product_rows,
 		"detail_rows": detail_rows,
 	})
@@ -1132,6 +1162,8 @@ def fuel_reading_entry(request, slug, reading_type):
 	if form_label is None:
 		raise Http404
 	site = request.current_site
+	if not _site_uses_fuel_reading(site, reading_type):
+		raise Http404
 	if not _can_access_site_form(request.user, site, reading_type):
 		return HttpResponseForbidden("Your account cannot access this form at this site.")
 	selected_date, _ = _selected_business_date(request)
@@ -1297,14 +1329,13 @@ def fuel_reading_entry(request, slug, reading_type):
 				before=before,
 				after=after,
 			)
-			next_reading_type = {
-				"tank-reading": "mechanical-readings",
-				"fuel-sales": "mechanical-readings",
-				"mechanical-readings": "electronic-readings",
-				"electronic-readings": None,
-			}[reading_type]
-			if reading_type == "tank-reading":
-				next_reading_type = "fuel-sales"
+			available_reading_types = _site_fuel_reading_types(site)
+			current_position = available_reading_types.index(reading_type)
+			next_reading_type = (
+				available_reading_types[current_position + 1]
+				if current_position + 1 < len(available_reading_types)
+				else None
+			)
 			return _fuel_workflow_redirect(
 				request,
 				site,
@@ -1365,6 +1396,7 @@ def fuel_reading_entry(request, slug, reading_type):
 		"fuel_reading_forms": [
 			{"key": key, "label": label}
 			for key, label in FUEL_READING_FORM_LABELS.items()
+			if _site_uses_fuel_reading(site, key)
 		],
 		"active_reading_type": reading_type,
 	})

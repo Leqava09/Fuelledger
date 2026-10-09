@@ -51,10 +51,10 @@
             {% include "ledger/cash_up_tabs.html" with active_cash_up_section="cash" %}
         </section>
         {% endif %}
-        <section class="fuel-reading-section" aria-labelledby="fuel-reading-heading">
+        {% if fuel_reading_forms %}<section class="fuel-reading-section" aria-labelledby="fuel-reading-heading">
             <div class="section-heading"><h2 id="fuel-reading-heading">Fuel Readings</h2></div>
             {% include "ledger/fuel_reading_tabs.html" %}
-        </section>
+        </section>{% endif %}
         {% if "book-in-fuel" in site_forms or "transfer-fuel" in site_forms %}
         <section class="fuel-reading-section" aria-labelledby="fuel-movements-heading">
             <div class="section-heading"><h2 id="fuel-movements-heading">Fuel Movements</h2></div>

@@ -83,6 +83,9 @@ class SiteConfigurationAdminTests(TestCase):
         self.assertContains(response, "Manager name")
         self.assertContains(response, "Site Name")
         self.assertContains(response, "Amount of shifts")
+        self.assertContains(response, "Readings used by site")
+        for field_name in ("use_tank_readings", "use_fuel_sales", "use_mechanical_readings", "use_electronic_readings"):
+            self.assertContains(response, f'name="{field_name}"')
         self.assertContains(response, "Tanks")
         self.assertContains(response, "Tank capacity (L)")
         self.assertContains(response, "Nozzles")
@@ -1012,6 +1015,71 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertLess(response.content.decode().index("fuel-workflow-actions"), response.content.decode().index("fuel-reading-tabs"))
         for reading_type in ("tank-reading", "fuel-sales", "mechanical-readings", "electronic-readings"):
             self.assertContains(response, reverse("fuel-reading-entry", args=[self.site.slug, reading_type]))
+
+    def test_site_reading_selection_filters_tabs_entry_and_fuel_report(self):
+        self.site.use_tank_readings = False
+        self.site.use_mechanical_readings = False
+        self.site.use_electronic_readings = False
+        self.site.save(update_fields=["use_tank_readings", "use_mechanical_readings", "use_electronic_readings"])
+        reading = DailyFuelReading.objects.create(
+            site=self.site,
+            business_date=self.business_date,
+            shift_label="Night",
+            created_by=self.user,
+            updated_by=self.user,
+            fuel_sales={"Diesel": "42.50"},
+        )
+        TankDipReading.objects.create(daily_reading=reading, tank=self.tank, dip_litres="1000.00")
+        NozzleFuelReading.objects.create(
+            daily_reading=reading,
+            nozzle=self.nozzle,
+            mechanical_reading="1200.00",
+            electronic_reading="1150.00",
+        )
+
+        dashboard = self.client.get(reverse("site-dashboard", args=[self.site.slug]), {
+            "date": self.business_date.isoformat(),
+            "shift": "Night",
+        })
+        self.assertContains(dashboard, reverse("fuel-reading-entry", args=[self.site.slug, "fuel-sales"]))
+        for reading_type in ("tank-reading", "mechanical-readings", "electronic-readings"):
+            self.assertNotContains(dashboard, reverse("fuel-reading-entry", args=[self.site.slug, reading_type]))
+            self.assertEqual(
+                self.client.get(reverse("fuel-reading-entry", args=[self.site.slug, reading_type]), {
+                    "date": self.business_date.isoformat(),
+                    "shift": "Night",
+                }).status_code,
+                404,
+            )
+
+        report = self.client.get(reverse("fuel-reports", args=[self.site.slug]), {
+            "period": "day",
+            "from_date": self.business_date.isoformat(),
+        })
+        self.assertEqual(report.status_code, 200)
+        self.assertEqual(len(report.context["product_rows"]), 1)
+        row = report.context["product_rows"][0]
+        self.assertEqual(row["fuel_sales"], Decimal("42.50"))
+        self.assertIsNone(row["tank_decrease"])
+        self.assertIsNone(row["mechanical"])
+        self.assertIsNone(row["electronic"])
+        self.assertNotContains(report, "Tank decrease")
+        self.assertNotContains(report, "Mechanical - Sales")
+
+        self.site.use_fuel_sales = False
+        self.site.save(update_fields=["use_fuel_sales"])
+        empty_dashboard = self.client.get(reverse("site-dashboard", args=[self.site.slug]), {
+            "date": self.business_date.isoformat(),
+            "shift": "Night",
+        })
+        self.assertNotContains(empty_dashboard, "Fuel Readings")
+        self.assertEqual(
+            self.client.get(reverse("fuel-reports", args=[self.site.slug]), {
+                "period": "day",
+                "from_date": self.business_date.isoformat(),
+            }).status_code,
+            403,
+        )
 
     def test_configured_shifts_drive_entry_and_reading_history(self):
         self.tank.capacity_litres = "25000.00"
