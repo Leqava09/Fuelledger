@@ -56,6 +56,38 @@ class CalculationTests(TestCase):
             validate_formula("__import__('os')", ["cash"])
 
 
+class FirstHQUserSetupTests(TestCase):
+    def test_first_hq_user_can_be_created_only_once_from_empty_user_table(self):
+        login_page = self.client.get(reverse("login"))
+        self.assertContains(login_page, "Add first-time user")
+
+        response = self.client.post(reverse("first-hq-user-setup"), {
+            "username": "initial-hq-user",
+            "first_name": "Head",
+            "last_name": "Office",
+            "email": "hq@example.com",
+            "password1": "Strong-First-HQ-Setup-8472!",
+            "password2": "Strong-First-HQ-Setup-8472!",
+        })
+
+        self.assertRedirects(response, reverse("hq-dashboard"), fetch_redirect_response=False)
+        user = User.objects.get(username="initial-hq-user")
+        self.assertTrue(user.is_staff)
+        self.assertFalse(user.is_superuser)
+        self.assertEqual(user.fuel_profile.role, UserProfile.Role.HQ)
+        self.assertIsNone(user.fuel_profile.site)
+        self.assertEqual(self.client.get(reverse("hq-dashboard")).status_code, 200)
+        self.assertNotContains(self.client.get(reverse("login")), "Add first-time user")
+        self.assertEqual(self.client.get(reverse("first-hq-user-setup")).status_code, 404)
+
+    def test_first_hq_setup_is_unavailable_if_any_user_already_exists(self):
+        User.objects.create_user(username="existing-account", password="test-pass-123")
+
+        self.assertNotContains(self.client.get(reverse("login")), "Add first-time user")
+        self.assertEqual(self.client.get(reverse("first-hq-user-setup")).status_code, 404)
+        self.assertEqual(self.client.post(reverse("first-hq-user-setup")).status_code, 404)
+
+
 class SiteConfigurationAdminTests(TestCase):
     def test_admin_home_redirects_to_hq_home(self):
         admin_user = User.objects.create_superuser(username="home-admin", password="test-pass-123", email="home-admin@example.com")
@@ -1150,7 +1182,7 @@ class DailyFuelReadingWorkflowTests(TestCase):
         fuel_sales_response = self.client.post(fuel_sales_url + f"?date={self.business_date.isoformat()}&shift=Night", {
             "business_date": self.business_date.isoformat(),
             "shift_label": "Night",
-            "fuel_sales_product_1": "123.45",
+            "fuel_sales_product_1": "123",
             "fuel_sales_product_2": "67.89",
             "fuel_sales_product_3": "10.00",
             "fuel_sales_product_4": "11.00",
@@ -1164,7 +1196,7 @@ class DailyFuelReadingWorkflowTests(TestCase):
         )
         reading = DailyFuelReading.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
         self.assertEqual(reading.fuel_sales, {
-            "Diesel": "123.45",
+            "Diesel": "123",
             "Petrol": "67.89",
             "Petrol 95": "10.00",
             "Petrol 93": "11.00",
@@ -1172,7 +1204,7 @@ class DailyFuelReadingWorkflowTests(TestCase):
             "Diesel 500PPM": "13.00",
         })
         reopened_fuel_sales = self.client.get(fuel_sales_url, entry_query)
-        self.assertContains(reopened_fuel_sales, 'value="123.45"')
+        self.assertContains(reopened_fuel_sales, 'value="123.00"')
         self.assertContains(reopened_fuel_sales, 'value="67.89"')
 
         mechanical_url = reverse("fuel-reading-entry", args=[self.site.slug, "mechanical-readings"])

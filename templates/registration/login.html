@@ -15,6 +15,7 @@
         <label for="id_username">Username</label>{{ form.username }}
         <label for="id_password">Password</label>{{ form.password }}
         <button class="button primary wide" type="submit">Continue <span aria-hidden="true">→</span></button>
+        {% if first_hq_user_setup_available %}<a class="button secondary wide first-hq-user-link" href="{% url 'first-hq-user-setup' %}">+ Add first-time user</a>{% endif %}
     </form>
 </section>
 {% endblock %}

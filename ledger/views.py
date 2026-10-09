@@ -3,9 +3,11 @@ import calendar
 from datetime import date, timedelta
 from decimal import Decimal
 
+from django.contrib.auth import login as auth_login
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.views import LoginView
 from django.contrib import messages
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Q
 from django.http import Http404, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
@@ -16,6 +18,7 @@ from django.contrib.auth.models import User
 from .forms import (
 	BookInFuelForm,
 	CashUpEntryForm,
+	FirstHQUserForm,
 	FuelSalesForm,
 	FuelTransferForm,
 	ElectronicReadingForm,
@@ -66,6 +69,39 @@ CASH_UP_TAB_LABELS = (
 	("airtime", "Airtime"),
 	("summary", "Summary"),
 )
+
+
+def _first_hq_user_setup_available():
+	return not User.objects.exists() and not UserProfile.objects.filter(role=UserProfile.Role.HQ).exists()
+
+
+class FuelLedgerLoginView(LoginView):
+	template_name = "registration/login.html"
+
+	def get_context_data(self, **kwargs):
+		context = super().get_context_data(**kwargs)
+		context["first_hq_user_setup_available"] = _first_hq_user_setup_available()
+		return context
+
+
+def first_hq_user_setup(request):
+	if not _first_hq_user_setup_available():
+		raise Http404
+	form = FirstHQUserForm(request.POST or None)
+	if request.method == "POST" and form.is_valid():
+		with transaction.atomic():
+			if connection.vendor == "postgresql":
+				with connection.cursor() as cursor:
+					cursor.execute("SELECT pg_advisory_xact_lock(%s)", [48273190522])
+			if not _first_hq_user_setup_available():
+				raise Http404
+			user = form.save(commit=False)
+			user.is_staff = True
+			user.save()
+			UserProfile.objects.create(user=user, role=UserProfile.Role.HQ)
+		auth_login(request, user)
+		return redirect("hq-dashboard")
+	return render(request, "registration/first_hq_user.html", {"form": form})
 
 
 def _selected_business_date(request):

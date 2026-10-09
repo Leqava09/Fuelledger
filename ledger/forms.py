@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from django import forms
 from django.contrib.admin.widgets import FilteredSelectMultiple
+from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Permission, User
 from django.utils import timezone
 
@@ -394,13 +395,16 @@ class FuelSalesForm(SiteReadingForm):
 		self.product_fields = []
 		for index, product in enumerate(products, start=1):
 			field_name = f"fuel_sales_product_{index}"
+			initial_sales = normalized_initial_readings.get(_product_key(product))
+			if initial_sales not in (None, ""):
+				initial_sales = Decimal(str(initial_sales)).quantize(Decimal("0.01"))
 			self.fields[field_name] = forms.DecimalField(
 				label=f"{product} sales (L)",
 				required=False,
 				min_value=0,
 				max_digits=14,
 				decimal_places=2,
-				initial=normalized_initial_readings.get(_product_key(product)),
+				initial=initial_sales,
 				widget=forms.NumberInput(attrs={"min": "0", "step": "0.01"}),
 			)
 			self.product_fields.append((product, field_name))
@@ -452,6 +456,15 @@ class MechanicalReadingForm(NozzleReadingForm):
 class ElectronicReadingForm(NozzleReadingForm):
 	reading_type = "electronic"
 	reading_label = "Electronic reading"
+
+
+class FirstHQUserForm(UserCreationForm):
+	first_name = forms.CharField(max_length=150, required=False)
+	last_name = forms.CharField(max_length=150, required=False)
+	email = forms.EmailField(required=False)
+
+	class Meta(UserCreationForm.Meta):
+		fields = ("username", "first_name", "last_name", "email")
 
 
 class SiteUserCreateForm(forms.Form):
