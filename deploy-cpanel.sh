@@ -9,7 +9,7 @@ if [[ ! -f .env ]]; then
 fi
 
 git pull --ff-only origin main
-source "$HOME/virtualenv/fuelledger/3.14/bin/activate"
+source "$HOME/virtualenv/fuelledger/3.11/bin/activate"
 python -m pip install -r requirements.txt
 python manage.py migrate --noinput
 python manage.py collectstatic --noinput
