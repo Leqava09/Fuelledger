@@ -90,6 +90,11 @@ class FirstHQUserSetupTests(TestCase):
 
 
 class SiteConfigurationAdminTests(TestCase):
+    def test_admin_login_page_is_available_to_anonymous_users(self):
+        response = self.client.get(reverse("admin:login"))
+
+        self.assertEqual(response.status_code, 200)
+
     def test_admin_home_redirects_to_hq_home(self):
         admin_user = User.objects.create_superuser(username="home-admin", password="test-pass-123", email="home-admin@example.com")
         client = Client()

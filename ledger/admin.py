@@ -43,6 +43,8 @@ def _record_admin_audit(site, user, category, label, action, before=None, after=
 def _can_manage_admin_site(request):
 	if not request.current_site:
 		return False
+	if not request.user.is_authenticated:
+		return False
 	if request.user.is_superuser:
 		return True
 	try:
@@ -214,6 +216,8 @@ class FuelLedgerUserAdmin(UserAdmin):
 	def _site_scope_allowed(self, request):
 		if not request.current_site:
 			return False
+		if not request.user.is_authenticated:
+			return False
 		if request.user.is_superuser:
 			return True
 		try:
@@ -227,6 +231,8 @@ class FuelLedgerUserAdmin(UserAdmin):
 		)
 
 	def _hq_admin_allowed(self, request):
+		if not request.user.is_authenticated:
+			return False
 		if request.user.is_superuser:
 			return True
 		try:
@@ -379,6 +385,8 @@ class SiteScopedUserAdmin(UserAdmin):
 	def _site_scope_allowed(self, request):
 		if not request.current_site:
 			return False
+		if not request.user.is_authenticated:
+			return False
 		if request.user.is_superuser:
 			return True
 		try:
@@ -447,6 +455,8 @@ class SiteScopedGroupAdmin(GroupAdmin):
 	def _site_scope_allowed(self, request):
 		if not request.current_site:
 			return False
+		if not request.user.is_authenticated:
+			return False
 		if request.user.is_superuser:
 			return True
 		try:
@@ -487,6 +497,8 @@ class FuelLedgerGroupAdmin(GroupAdmin):
 	def _site_scope_allowed(self, request):
 		if not request.current_site:
 			return False
+		if not request.user.is_authenticated:
+			return False
 		if request.user.is_superuser:
 			return True
 		try:
@@ -500,6 +512,8 @@ class FuelLedgerGroupAdmin(GroupAdmin):
 		)
 
 	def _hq_admin_allowed(self, request):
+		if not request.user.is_authenticated:
+			return False
 		if request.user.is_superuser:
 			return True
 		try:
@@ -607,6 +621,8 @@ class SiteAdmin(nested_admin.NestedModelAdmin):
 	)
 
 	def _is_hq_user(self, request):
+		if not request.user.is_authenticated:
+			return False
 		if request.user.is_superuser:
 			return True
 		try:
