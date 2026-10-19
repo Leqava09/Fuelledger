@@ -12,8 +12,11 @@
 {% if mode == "review" %}
 <section class="form-section">
     <div class="form-section-title"><span>01</span><h2>Review report values</h2></div>
-    <p>Report date: <strong>{{ report.business_date }}</strong>. This full-day report imports electronic readings, fuel sales, and tank readings together into the selected shift.</p>
-    <p>Review every mapping and tank value. Nothing is saved until you confirm.</p>
+    <p>Report date: <strong>{{ report.business_date }}</strong>. This full-day report imports readings and mapped cash-up values together into the selected shift.</p>
+    <p>Review every mapping and value. Nothing is saved until you confirm.</p>
+    {% if overwrite_existing or overwrite_cash_up %}<div class="report-import-notice" role="status">This shift already has saved data. Confirming will replace matching electronic and tank readings, imported fuel sales, and the mapped cash-up values.</div>{% endif %}
+    {% if report.warnings %}<div class="report-import-notice" role="status"><strong>Report checks need review</strong><ul>{% for warning in report.warnings %}<li>{{ warning }}</li>{% endfor %}</ul></div>{% endif %}
+    {% if opening_mismatches %}<div class="report-import-notice" role="alert"><strong>Opening readings differ from the previous shift</strong><ul>{% for mismatch in opening_mismatches %}<li>{{ mismatch.nozzle }}: previous closing {{ mismatch.previous_reading }} L; report opening {{ mismatch.entered_opening }} L.</li>{% endfor %}</ul><label><input type="checkbox" name="opening_mismatch_confirmed" value="1" required> Confirm import and notify HQ for review</label></div>{% endif %}
     <form method="post" class="entry-form">
         {% csrf_token %}
         <input type="hidden" name="action" value="confirm">
@@ -28,7 +31,7 @@
         <div class="reading-table-wrap">
             <h3>Electronic Readings</h3>
             <table class="reading-table">
-                <thead><tr><th>Report nozzle</th><th>Grade</th><th>Opening</th><th>Closing</th><th>Sales (L)</th><th>Configured nozzle</th></tr></thead>
+                <thead><tr><th>Report nozzle</th><th>Grade</th><th>Opening</th><th>Closing</th><th>Calculated Difference</th><th>Totalizer in L</th><th>Configured nozzle</th></tr></thead>
                 <tbody>
                     {% for row in report.nozzles %}
                     <tr>
@@ -36,7 +39,8 @@
                         <td>{{ row.grade }}</td>
                         <td>{{ row.opening }}</td>
                         <td>{{ row.closing }}</td>
-                        <td>{{ row.sales_litres }}</td>
+                        <td>{{ row.calculated_difference }}</td>
+                        <td>{{ row.totalizer_litres }}</td>
                         <td>
                             <select name="nozzle_{{ row.number }}" required aria-label="Map report nozzle {{ row.number }}">
                                 <option value="">Choose nozzle</option>
@@ -89,8 +93,20 @@
                 </tbody>
             </table>
         </div>
-        <div class="form-row"><label><input type="checkbox" name="remember_mappings" checked> Remember these nozzle matches for future reports</label></div>
-        <button class="button primary" type="submit">Import all three modules</button>
+        <div class="reading-table-wrap">
+            <h3>Cash Up</h3>
+            <table class="reading-table">
+                <thead><tr><th>Report value</th><th>Cash-up field</th><th>Amount</th></tr></thead>
+                <tbody>
+                    <tr><td>Fuel sales Value ExVAT</td><td>Total amount Forecourt</td><td><input type="number" name="cash_up_forecourt_total" value="{{ report.cash_up.forecourt_total }}" min="0" step="0.01" required></td></tr>
+                    <tr><td>Money Drops for Period</td><td>Safedrops</td><td><input type="number" name="cash_up_safedrops" value="{{ report.cash_up.safedrops }}" min="0" step="0.01" required></td></tr>
+                    <tr><td>Total Account</td><td>Account 1</td><td><input type="number" name="cash_up_account_1" value="{{ report.cash_up.account_1 }}" min="0" step="0.01" required></td></tr>
+                    <tr><td>Total Payouts</td><td>Payout 1</td><td><input type="number" name="cash_up_payout_1" value="{{ report.cash_up.payout_1 }}" min="0" step="0.01" required></td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="form-row"><label><input type="checkbox" name="remember_mappings" checked> Remember these nozzle, product, and tank matches for future reports</label></div>
+        <button class="button primary" type="submit">Import all report values</button>
     </form>
 </section>
 {% else %}

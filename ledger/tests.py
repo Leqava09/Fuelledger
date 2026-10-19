@@ -30,6 +30,7 @@ from ledger.models import (
     DailyFuelReading,
     FuelBooking,
     FuelTransfer,
+    FuelReadingSequenceAlert,
     ManualShopPoint,
     Nozzle,
     NozzleFuelReading,
@@ -534,6 +535,7 @@ class SiteAccessTests(TestCase):
         importer_url = reverse("fuel-report-import", args=[self.site_one.slug])
 
         dashboard = self.client.get(dashboard_url, {"date": selected_date.isoformat(), "shift": "Day"})
+        self.assertContains(dashboard, "POS Report Import")
         self.assertContains(
             dashboard,
             f"{importer_url}?date={selected_date.isoformat()}&amp;shift=Day",
@@ -1238,6 +1240,13 @@ class DailyFuelReadingWorkflowTests(TestCase):
             "period_from": datetime(2026, 10, 6, 0, 0),
             "period_to": datetime(2026, 10, 6, 23, 59, 59),
             "business_date": date(2026, 10, 6),
+            "warnings": ["Pump fuel sales do not match the POS fuel sales total."],
+            "cash_up": {
+                "forecourt_total": Decimal("119973.10"),
+                "safedrops": Decimal("25130.00"),
+                "account_1": Decimal("2162.20"),
+                "payout_1": Decimal("2142.45"),
+            },
             "fuel_sales": [
                 {"grade": "Diesel", "litres": Decimal("2166.44")},
                 {"grade": "Petrol", "litres": Decimal("837.79")},
@@ -1276,6 +1285,8 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertEqual(preview.status_code, 200)
         self.assertContains(preview, "Review report values")
         self.assertContains(preview, "full-day report")
+        self.assertContains(preview, "Pump fuel sales do not match")
+        self.assertFalse(preview.context["overwrite_existing"])
         self.assertFalse(DailyFuelReading.objects.exists())
         token = preview.context["report_token"]
         confirmed = self.client.post(upload_url, {
@@ -1293,6 +1304,10 @@ class DailyFuelReadingWorkflowTests(TestCase):
             "tank_petrol_1": str(self.tank_two.pk),
             "tank_opening_petrol_1": "100.00",
             "tank_closing_petrol_1": "200.00",
+            "cash_up_forecourt_total": "119973.10",
+            "cash_up_safedrops": "25130.00",
+            "cash_up_account_1": "2162.20",
+            "cash_up_payout_1": "2142.45",
             "remember_mappings": "on",
         })
 
@@ -1311,6 +1326,11 @@ class DailyFuelReadingWorkflowTests(TestCase):
         petrol_dip = reading.tank_readings.get(tank=self.tank_two)
         self.assertEqual(petrol_dip.opening_dip_litres, Decimal("100.00"))
         self.assertEqual(petrol_dip.dip_litres, Decimal("200.00"))
+        cash_up = CashUpShiftRecord.objects.get(site=self.site, business_date=date(2026, 10, 6), shift_label="Night")
+        self.assertEqual(cash_up.values["forecourt_total"], "119973.10")
+        self.assertEqual(cash_up.values["safedrops"], "25130.00")
+        self.assertEqual(cash_up.values["sales_account_1"], "2162.20")
+        self.assertEqual(cash_up.values["payout_1"], "2142.45")
         self.site.refresh_from_db()
         self.assertEqual(self.site.report_nozzle_mapping, {"1": self.nozzle.pk, "2": self.nozzle_two.pk})
         self.assertEqual(self.site.report_product_mapping, {"diesel": "Diesel", "petrol": "Petrol"})
@@ -1323,12 +1343,104 @@ class DailyFuelReadingWorkflowTests(TestCase):
             next_preview = self.client.post(upload_url, {"action": "upload", "shift_label": "Night", "report_pdf": upload})
         imported_rows = next_preview.context["report"]["nozzles"]
         self.assertEqual(imported_rows[0]["selected_nozzle_id"], self.nozzle.pk)
+        self.assertTrue(next_preview.context["overwrite_existing"])
+
+    def test_confirmed_opening_mismatch_notifies_hq_until_cleared(self):
+        previous = DailyFuelReading.objects.create(
+            site=self.site,
+            business_date=date(2026, 10, 5),
+            shift_label="Day",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        NozzleFuelReading.objects.create(
+            daily_reading=previous,
+            nozzle=self.nozzle,
+            electronic_opening_reading=Decimal("6900.00"),
+            electronic_reading=Decimal("7000.00"),
+        )
+        report = {
+            "period_from": datetime(2026, 10, 6, 0, 0),
+            "period_to": datetime(2026, 10, 6, 23, 59, 59),
+            "business_date": date(2026, 10, 6),
+            "warnings": [],
+            "cash_up": {
+                "forecourt_total": Decimal("100.00"),
+                "safedrops": Decimal("20.00"),
+                "account_1": Decimal("3.00"),
+                "payout_1": Decimal("4.00"),
+            },
+            "fuel_sales": [{"grade": "Diesel", "litres": Decimal("10.00")}],
+            "tank_readings": [
+                {"row": 1, "grade": "Diesel", "grade_index": 1, "opening": Decimal("80.00"), "closing": Decimal("90.00")},
+            ],
+            "nozzles": [{
+                "number": 1,
+                "grade": "DIESEL50PPM",
+                "opening": Decimal("7040.00"),
+                "closing": Decimal("7667.00"),
+                "totalizer_litres": Decimal("627.00"),
+                "sales_litres": Decimal("626.58"),
+                "variance": Decimal("-0.42"),
+            }],
+        }
+        upload_url = f"{reverse('fuel-report-import', args=[self.site.slug])}?date=2026-10-06&shift=Night"
+        upload = SimpleUploadedFile("report.pdf", b"%PDF-report", content_type="application/pdf")
+        with patch("ledger.views.parse_pdf", return_value=report):
+            preview = self.client.post(upload_url, {"action": "upload", "shift_label": "Night", "report_pdf": upload})
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertContains(preview, "previous shift")
+        self.assertContains(preview, "7000.00")
+        token = preview.context["report_token"]
+        payload = {
+            "action": "confirm",
+            "selected_date": "2026-10-06",
+            "report_token": token,
+            "shift_label": "Night",
+            "nozzle_1": str(self.nozzle.pk),
+            "product_diesel": "Diesel",
+            "tank_diesel_1": str(self.tank.pk),
+            "tank_opening_diesel_1": "80.00",
+            "tank_closing_diesel_1": "90.00",
+            "cash_up_forecourt_total": "100.00",
+            "cash_up_safedrops": "20.00",
+            "cash_up_account_1": "3.00",
+            "cash_up_payout_1": "4.00",
+        }
+        confirmation_required = self.client.post(upload_url, payload)
+        self.assertEqual(confirmation_required.status_code, 200)
+        self.assertContains(confirmation_required, "Confirm import and notify HQ")
+        self.assertFalse(DailyFuelReading.objects.filter(site=self.site, business_date=date(2026, 10, 6)).exists())
+        self.assertFalse(FuelReadingSequenceAlert.objects.exists())
+
+        confirmed = self.client.post(upload_url, {**payload, "opening_mismatch_confirmed": "1"})
+        self.assertEqual(confirmed.status_code, 302)
+        alert = FuelReadingSequenceAlert.objects.get(site=self.site)
+        self.assertEqual(alert.previous_reading, Decimal("7000.00"))
+        self.assertEqual(alert.entered_opening, Decimal("7040.00"))
+        self.assertFalse(alert.approved)
+
+        hq_user = User.objects.create_user(username="fuel-alert-hq", password="test-pass-123")
+        UserProfile.objects.create(user=hq_user, role=UserProfile.Role.HQ)
+        self.client.force_login(hq_user)
+        self.assertContains(self.client.get(reverse("hq-dashboard")), "Fuel reading opening mismatches")
+        approved = self.client.post(reverse("approve-fuel-reading-alert", args=[alert.pk]))
+        self.assertRedirects(approved, reverse("hq-dashboard"), fetch_redirect_response=False)
+        alert.refresh_from_db()
+        self.assertTrue(alert.approved)
 
     def test_report_import_rejects_duplicate_nozzle_mappings(self):
         report = {
             "period_from": datetime(2026, 10, 6, 0, 0),
             "period_to": datetime(2026, 10, 6, 23, 59, 59),
             "business_date": date(2026, 10, 6),
+            "cash_up": {
+                "forecourt_total": Decimal("1.00"),
+                "safedrops": Decimal("0.00"),
+                "account_1": Decimal("0.00"),
+                "payout_1": Decimal("0.00"),
+            },
             "fuel_sales": [{"grade": "Petrol", "litres": Decimal("2.00")}],
             "tank_readings": [
                 {"row": 1, "grade": "Petrol", "grade_index": 1, "opening": Decimal("1.00"), "closing": Decimal("2.00")},

@@ -403,6 +403,34 @@ class AirtimeSequenceAlert(models.Model):
 		return f"{self.site} / {self.cash_up_record.business_date} / {self.cash_up_record.shift_label} / Airtime {self.card_index}"
 
 
+class FuelReadingSequenceAlert(models.Model):
+	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="fuel_reading_sequence_alerts")
+	daily_reading = models.ForeignKey("DailyFuelReading", on_delete=models.CASCADE, related_name="sequence_alerts")
+	nozzle = models.ForeignKey(Nozzle, on_delete=models.PROTECT, related_name="sequence_alerts")
+	previous_reading = models.DecimalField(max_digits=14, decimal_places=2)
+	entered_opening = models.DecimalField(max_digits=14, decimal_places=2)
+	flagged_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="fuel_reading_alerts_flagged")
+	approved = models.BooleanField(default=False)
+	approved_by = models.ForeignKey(
+		settings.AUTH_USER_MODEL,
+		null=True,
+		blank=True,
+		on_delete=models.SET_NULL,
+		related_name="fuel_reading_alerts_approved",
+	)
+	created_at = models.DateTimeField(auto_now_add=True)
+	approved_at = models.DateTimeField(null=True, blank=True)
+
+	class Meta:
+		ordering = ["-created_at"]
+		constraints = [
+			models.UniqueConstraint(fields=["daily_reading", "nozzle"], name="unique_fuel_reading_alert_per_nozzle"),
+		]
+
+	def __str__(self):
+		return f"{self.site} / {self.daily_reading.business_date} / {self.daily_reading.shift_label} / {self.nozzle} opening mismatch"
+
+
 class DailyFuelReading(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="daily_fuel_readings")
 	business_date = models.DateField()

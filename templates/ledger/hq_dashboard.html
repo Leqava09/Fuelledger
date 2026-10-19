@@ -41,6 +41,33 @@
     </div>
     {% else %}<p class="empty-state">No Airtime number alerts need review.</p>{% endif %}
 </section>
+<section class="hq-sites-section airtime-alert-section" aria-labelledby="fuel-reading-alert-heading">
+    <div class="hq-sites-heading">
+        <h2 id="fuel-reading-alert-heading">Fuel reading opening mismatches</h2>
+        <span>{{ pending_fuel_reading_alerts|length }} pending</span>
+    </div>
+    {% if pending_fuel_reading_alerts %}
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>Site</th><th>Date</th><th>Shift</th><th>Nozzle</th><th>Previous closing</th><th>Imported opening</th><th>Flagged by</th><th>Action</th></tr></thead>
+            <tbody>
+                {% for alert in pending_fuel_reading_alerts %}
+                <tr>
+                    <td>{{ alert.site.name }}</td>
+                    <td>{{ alert.daily_reading.business_date|date:"d M Y" }}</td>
+                    <td>{{ alert.daily_reading.shift_label }}</td>
+                    <td>{{ alert.nozzle.name }}</td>
+                    <td>{{ alert.previous_reading }}</td>
+                    <td>{{ alert.entered_opening }}</td>
+                    <td>{{ alert.flagged_by.get_full_name|default:alert.flagged_by.username }}</td>
+                    <td><form method="post" action="{% url 'approve-fuel-reading-alert' alert.pk %}">{% csrf_token %}<button class="button secondary" type="submit">Approve / Clear</button></form></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}<p class="empty-state">No fuel reading opening mismatches need review.</p>{% endif %}
+</section>
 <section class="hq-sites-section" aria-labelledby="hq-sites-heading">
     <div class="hq-sites-heading">
         <h2 id="hq-sites-heading">Sites</h2>

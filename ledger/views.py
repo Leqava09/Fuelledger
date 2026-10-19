@@ -38,6 +38,7 @@ from .models import (
 	DailyFuelReading,
 	FuelBooking,
 	FuelTransfer,
+	FuelReadingSequenceAlert,
 	NozzleFuelReading,
 	Nozzle,
 	ShiftEntry,
@@ -246,9 +247,13 @@ def hq_dashboard(request):
 	pending_airtime_alerts = AirtimeSequenceAlert.objects.filter(approved=False).select_related(
 		"site", "cash_up_record", "flagged_by",
 	).order_by("-created_at")
+	pending_fuel_reading_alerts = FuelReadingSequenceAlert.objects.filter(approved=False).select_related(
+		"site", "daily_reading", "nozzle", "flagged_by",
+	).order_by("-created_at")
 	return render(request, "ledger/hq_dashboard.html", {
 		"sites": sites,
 		"pending_airtime_alerts": pending_airtime_alerts,
+		"pending_fuel_reading_alerts": pending_fuel_reading_alerts,
 	})
 
 
@@ -264,6 +269,21 @@ def approve_airtime_sequence_alert(request, alert_id):
 	alert.approved_at = timezone.now()
 	alert.save(update_fields=["approved", "approved_by", "approved_at"])
 	messages.success(request, "Airtime sequence flag approved and cleared.")
+	return redirect("hq-dashboard")
+
+
+@login_required
+@require_POST
+def approve_fuel_reading_sequence_alert(request, alert_id):
+	profile = _profile(request.user)
+	if not request.user.is_superuser and (not profile or profile.role != UserProfile.Role.HQ):
+		return HttpResponseForbidden("Only HQ users can approve fuel reading alerts.")
+	alert = get_object_or_404(FuelReadingSequenceAlert, pk=alert_id, approved=False)
+	alert.approved = True
+	alert.approved_by = request.user
+	alert.approved_at = timezone.now()
+	alert.save(update_fields=["approved", "approved_by", "approved_at"])
+	messages.success(request, "Fuel reading discrepancy approved and cleared.")
 	return redirect("hq-dashboard")
 
 
@@ -299,7 +319,7 @@ def site_dashboard(request, slug):
 		],
 		"can_import_fuel_report": (
 			all(_site_uses_fuel_reading(site, key) for key in ("electronic-readings", "fuel-sales", "tank-reading"))
-			and all(_can_access_site_form(request.user, site, key) for key in ("electronic-readings", "fuel-sales", "tank-reading"))
+			and all(_can_access_site_form(request.user, site, key) for key in ("electronic-readings", "fuel-sales", "tank-reading", "cash-up"))
 		),
 		"cash_up_tabs": [
 			{"key": key, "label": tab_label}
@@ -1581,10 +1601,60 @@ def _report_tank_mapping(site, report_rows, selected_tanks=None):
 	return choices
 
 
+def _report_opening_mismatches(site, selected_date, shift_label, report_rows, selected_nozzles):
+	previous_reading = _previous_daily_reading(site, selected_date, shift_label, "electronic-readings")
+	if previous_reading is None:
+		return []
+	previous_values = {
+		item.nozzle_id: item.electronic_reading
+		for item in previous_reading.nozzle_readings.all()
+		if item.electronic_reading is not None
+	}
+	mismatches = []
+	for row in report_rows:
+		nozzle_id = selected_nozzles.get(row["number"])
+		previous_value = previous_values.get(nozzle_id)
+		if previous_value is None:
+			continue
+		opening = Decimal(str(row["opening"]))
+		if abs(opening - previous_value) > Decimal("0.01"):
+			nozzle = Nozzle.objects.select_related("tank").get(pk=nozzle_id)
+			mismatches.append({
+				"nozzle_id": nozzle_id,
+				"nozzle": f"{nozzle.name} / {nozzle.tank.name} / {nozzle.tank.product}",
+				"previous_reading": previous_value,
+				"entered_opening": opening,
+			})
+	return mismatches
+
+
 def _report_review_context(site, report, shift_label, selected_nozzles=None, selected_products=None, selected_tanks=None):
 	nozzle_choices = _report_nozzle_mapping(site, report["nozzles"], selected_nozzles)
 	product_choices = _report_product_mapping(site, report["fuel_sales"], selected_products)
 	tank_choices = _report_tank_mapping(site, report["tank_readings"], selected_tanks)
+	existing_reading = DailyFuelReading.objects.filter(
+		site=site,
+		business_date=date.fromisoformat(report["business_date"]),
+		shift_label=shift_label,
+	).first()
+	cash_up_record = CashUpShiftRecord.objects.filter(
+		site=site,
+		business_date=date.fromisoformat(report["business_date"]),
+		shift_label=shift_label,
+	).first()
+	overwrite_existing = bool(existing_reading and (
+		existing_reading.fuel_sales
+		or existing_reading.tank_readings.exists()
+		or existing_reading.nozzle_readings.filter(
+			Q(electronic_opening_reading__isnull=False) | Q(electronic_reading__isnull=False)
+		).exists()
+	))
+	overwrite_cash_up = bool(cash_up_record and any(
+		value not in (None, "")
+		for key, value in cash_up_record.values.items()
+		if key in {"forecourt_total", "safedrops"}
+		or re.fullmatch(r"sales_account_\d+|payout_\d+", key)
+	))
 	return {
 		"site": site,
 		"mode": "review",
@@ -1593,6 +1663,15 @@ def _report_review_context(site, report, shift_label, selected_nozzles=None, sel
 		"shift_names": site.get_shift_names(),
 		"selected_date": date.fromisoformat(report["business_date"]),
 		"selected_shift": shift_label,
+		"overwrite_existing": overwrite_existing,
+		"overwrite_cash_up": overwrite_cash_up,
+		"opening_mismatches": _report_opening_mismatches(
+			site,
+			date.fromisoformat(report["business_date"]),
+			shift_label,
+			report["nozzles"],
+			{row["number"]: row["selected_nozzle_id"] for row in report["nozzles"] if row.get("selected_nozzle_id")},
+		),
 		"nozzle_choices": nozzle_choices,
 		"product_choices": product_choices,
 		"tank_choices": tank_choices,
@@ -1605,8 +1684,8 @@ def fuel_report_import(request, slug):
 	required_reading_types = ("electronic-readings", "fuel-sales", "tank-reading")
 	if not all(_site_uses_fuel_reading(site, key) for key in required_reading_types):
 		raise Http404
-	if not all(_can_access_site_form(request.user, site, key) for key in required_reading_types):
-		return HttpResponseForbidden("Your account needs access to electronic readings, fuel sales, and tank readings to import this report.")
+	if not all(_can_access_site_form(request.user, site, key) for key in (*required_reading_types, "cash-up")):
+		return HttpResponseForbidden("Your account needs access to all fuel readings and cash-up to import this report.")
 
 	shift_names = site.get_shift_names()
 	selected_date, _ = _selected_business_date(request)
@@ -1666,6 +1745,7 @@ def fuel_report_import(request, slug):
 		selected_nozzles = {}
 		selected_products = {}
 		selected_tanks = {}
+		selected_cash_up = {}
 		try:
 			for row in payload["nozzles"]:
 				nozzle_id = int(request.POST.get(f"nozzle_{row['number']}", ""))
@@ -1706,6 +1786,12 @@ def fuel_report_import(request, slug):
 				row["opening"] = str(opening)
 				row["closing"] = str(closing)
 				selected_tank_rows.append((tank_id, opening, closing))
+
+			for key in ("forecourt_total", "safedrops", "account_1", "payout_1"):
+				value = Decimal(request.POST.get(f"cash_up_{key}", payload["cash_up"][key])).quantize(Decimal("0.01"))
+				if value < 0 or value > Decimal("100000000"):
+					raise ValueError
+				selected_cash_up[key] = value
 		except (KeyError, TypeError, ValueError, ArithmeticError):
 			context.update(_report_review_context(
 				site,
@@ -1716,7 +1802,28 @@ def fuel_report_import(request, slug):
 				selected_tanks,
 			))
 			context["report_token"] = request.POST.get("report_token", "")
-			context["error"] = "Each report nozzle must map to a unique configured nozzle. Check product and tank matches; tank values must be nonnegative and within capacity, and closing totalizers cannot be below opening values. No data was imported."
+			context["error"] = "Each report nozzle must map to a unique configured nozzle. Check product, tank, and cash-up values; tank volumes must be nonnegative and within capacity. No data was imported."
+			return render(request, "ledger/fuel_report_import.html", context)
+
+		opening_mismatches = _report_opening_mismatches(
+			site,
+			business_date,
+			shift_label,
+			payload["nozzles"],
+			selected_nozzles,
+		)
+		if opening_mismatches and request.POST.get("opening_mismatch_confirmed") != "1":
+			context.update(_report_review_context(
+				site,
+				payload,
+				shift_label,
+				selected_nozzles,
+				selected_products,
+				selected_tanks,
+			))
+			context["report_token"] = request.POST.get("report_token", "")
+			context["opening_mismatches"] = opening_mismatches
+			context["error"] = "Some report opening volumes do not match the previous shift closing readings. Confirm to import and notify HQ."
 			return render(request, "ledger/fuel_report_import.html", context)
 
 		with transaction.atomic():
@@ -1739,6 +1846,13 @@ def fuel_report_import(request, slug):
 				item.tank_id: item
 				for item in reading.tank_readings.filter(tank_id__in=selected_tank_ids)
 			}
+			cash_up_record = CashUpShiftRecord.objects.filter(
+				site=site,
+				business_date=business_date,
+				shift_label=shift_label,
+			).first()
+			cash_up_was_existing = cash_up_record is not None
+			cash_up_before = dict(cash_up_record.values) if cash_up_record else {}
 			before = {
 				"electronic_readings": {
 				str(nozzle_id): {
@@ -1748,6 +1862,18 @@ def fuel_report_import(request, slug):
 				for nozzle_id, _, _ in selected_nozzle_rows
 				},
 				"fuel_sales": dict(reading.fuel_sales),
+				"cash_up": {
+					"forecourt_total": cash_up_before.get("forecourt_total"),
+					"safedrops": cash_up_before.get("safedrops"),
+					"sales_accounts": {
+						key: value for key, value in cash_up_before.items()
+						if re.fullmatch(r"sales_account_\d+", key)
+					},
+					"payouts": {
+						key: value for key, value in cash_up_before.items()
+						if re.fullmatch(r"payout_\d+", key)
+					},
+				},
 				"tank_readings": {
 					str(tank_id): {
 						"opening_dip_litres": str(existing_tanks[tank_id].opening_dip_litres) if existing_tanks.get(tank_id) and existing_tanks[tank_id].opening_dip_litres is not None else None,
@@ -1766,6 +1892,25 @@ def fuel_report_import(request, slug):
 					nozzle_reading.mechanical_reading = None
 				nozzle_reading.full_clean()
 				nozzle_reading.save()
+			for issue in opening_mismatches:
+				alert, created_alert = FuelReadingSequenceAlert.objects.get_or_create(
+					daily_reading=reading,
+					nozzle_id=issue["nozzle_id"],
+					defaults={
+						"site": site,
+						"previous_reading": issue["previous_reading"],
+						"entered_opening": issue["entered_opening"],
+						"flagged_by": request.user,
+					},
+				)
+				if not created_alert:
+					alert.previous_reading = issue["previous_reading"]
+					alert.entered_opening = issue["entered_opening"]
+					alert.flagged_by = request.user
+					alert.approved = False
+					alert.approved_by = None
+					alert.approved_at = None
+					alert.save(update_fields=["previous_reading", "entered_opening", "flagged_by", "approved", "approved_by", "approved_at"])
 			for tank_id, opening, closing in selected_tank_rows:
 				tank_reading = existing_tanks.get(tank_id) or TankDipReading(
 					daily_reading=reading,
@@ -1778,16 +1923,53 @@ def fuel_report_import(request, slug):
 			reading.fuel_sales = {product: str(litres) for product, litres in selected_product_rows}
 			reading.full_clean()
 			reading.save(update_fields=["fuel_sales", "updated_by", "updated_at"])
+			cash_up_values = dict(cash_up_before)
+			for key in list(cash_up_values):
+				if re.fullmatch(r"sales_account_\d+|payout_\d+", key):
+					cash_up_values.pop(key)
+			cash_up_values["forecourt_total"] = str(selected_cash_up["forecourt_total"])
+			cash_up_values["safedrops"] = str(selected_cash_up["safedrops"])
+			cash_up_values["sales_account_1"] = str(selected_cash_up["account_1"])
+			cash_up_values["payout_1"] = str(selected_cash_up["payout_1"])
+			repeat_counts = dict(cash_up_values.get("repeat_counts", {}))
+			repeat_counts.update({"sales_account": 1, "payouts": 1})
+			cash_up_values["repeat_counts"] = repeat_counts
+			if cash_up_record is None:
+				cash_up_record = CashUpShiftRecord(
+					site=site,
+					business_date=business_date,
+					shift_label=shift_label,
+					created_by=request.user,
+					values=cash_up_values,
+				)
+			else:
+				cash_up_record.values = cash_up_values
+			cash_up_record.full_clean()
+			cash_up_record.save()
 			after = {
 				"electronic_readings": {
 				str(nozzle_id): {"opening_reading": str(opening), "reading": str(closing)}
 				for nozzle_id, opening, closing in selected_nozzle_rows
 				},
 				"fuel_sales": dict(reading.fuel_sales),
+				"cash_up": {
+					"forecourt_total": cash_up_values["forecourt_total"],
+					"safedrops": cash_up_values["safedrops"],
+					"sales_account_1": cash_up_values["sales_account_1"],
+					"payout_1": cash_up_values["payout_1"],
+				},
 				"tank_readings": {
 					str(tank_id): {"opening_dip_litres": str(opening), "dip_litres": str(closing)}
 					for tank_id, opening, closing in selected_tank_rows
 				},
+				"opening_mismatches": [
+					{
+						"nozzle_id": issue["nozzle_id"],
+						"previous_reading": str(issue["previous_reading"]),
+						"entered_opening": str(issue["entered_opening"]),
+					}
+					for issue in opening_mismatches
+				],
 			}
 			if request.POST.get("remember_mappings") == "on":
 				nozzle_mapping = dict(site.report_nozzle_mapping)
@@ -1805,11 +1987,11 @@ def fuel_report_import(request, slug):
 				request.user,
 				"Fuel Report Import",
 				f"{business_date.isoformat()} / {shift_label}",
-				"updated" if not created or any(value["reading"] is not None for value in before["electronic_readings"].values()) else "created",
+				"updated" if not created or cash_up_was_existing or any(value["reading"] is not None for value in before["electronic_readings"].values()) else "created",
 				before=before,
 				after=after,
 			)
-		messages.success(request, "Imported electronic readings, fuel sales, and tank readings from the report.")
+		messages.success(request, "Imported electronic readings, fuel sales, tank readings, and mapped cash-up values from the report.")
 		return redirect(
 			f"{reverse('fuel-reading-entry', args=[site.slug, 'electronic-readings'])}"
 			f"?date={business_date.isoformat()}&shift={shift_label}"
@@ -1852,7 +2034,10 @@ def fuel_report_import(request, slug):
 		"period_from": report["period_from"].isoformat(sep=" "),
 		"period_to": report["period_to"].isoformat(sep=" "),
 		"nozzles": [
-			{key: str(value) if isinstance(value, Decimal) else value for key, value in row.items()}
+			{
+				**{key: str(value) if isinstance(value, Decimal) else value for key, value in row.items()},
+				"calculated_difference": str(row["closing"] - row["opening"]),
+			}
 			for row in report["nozzles"]
 		],
 		"fuel_sales": [
@@ -1869,6 +2054,8 @@ def fuel_report_import(request, slug):
 			}
 			for row in report["tank_readings"]
 		],
+		"cash_up": {key: str(value) for key, value in report["cash_up"].items()},
+		"warnings": report.get("warnings", []),
 	}
 	context.update(_report_review_context(site, serializable_report, shift_label))
 	return render(request, "ledger/fuel_report_import.html", context)

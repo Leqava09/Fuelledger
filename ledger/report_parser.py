@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 
 NUMBER = r"-?(?:\d[\d,]*\.?\d*|\.\d+)"
 GRADE = r"(?:DIESEL\w*|ULP\d+|LRP\d*|UNLEADED\w*)"
+MAX_REPORT_PAGES = 5
 PERIOD_PATTERN = re.compile(
 	r"From:\s*(\d{4}-\d\d-\d\d\s+\d\d:\d\d:\d\d)\s+"
 	r"To:\s*(\d{4}-\d\d-\d\d\s+\d\d:\d\d:\d\d)"
@@ -22,6 +23,27 @@ FUEL_SALES_PATTERN = re.compile(
 TANK_READING_PATTERN = re.compile(
 	rf"^[ \t]*({GRADE})\s+({NUMBER})\s*@\s*(\d{{4}}-\d\d-\d\d\s+\d\d:\d\d:\d\d)\s+"
 	rf"({NUMBER})\s+({NUMBER})\s*@\s*(\d{{4}}-\d\d-\d\d\s+\d\d:\d\d:\d\d)\s*$",
+	re.MULTILINE | re.IGNORECASE,
+)
+NOZZLE_ROW_CANDIDATE_PATTERN = re.compile(r"^[ \t]*\d+\s+\S+.*$", re.MULTILINE)
+GRADE_ROW_CANDIDATE_PATTERN = re.compile(
+	rf"^[ \t]*[A-Z][A-Z0-9_-]*\s+{NUMBER}\s+{NUMBER}\s+{NUMBER}\s+\d+(?:\.\d+)?\s+{NUMBER}\s*$",
+	re.MULTILINE | re.IGNORECASE,
+)
+TANK_ROW_CANDIDATE_PATTERN = re.compile(
+	rf"^[ \t]*[A-Z][A-Z0-9_-]*\s+{NUMBER}\s*@\s*\d{{4}}-\d\d-\d\d\s+\d\d:\d\d:\d\d\s+{NUMBER}\s+{NUMBER}\s*@",
+	re.MULTILINE | re.IGNORECASE,
+)
+NOZZLE_TOTAL_PATTERN = re.compile(
+	rf"^[ \t]*Totals:\s*({NUMBER})\s+({NUMBER})\s+({NUMBER})\s*$",
+	re.MULTILINE | re.IGNORECASE,
+)
+FUEL_SALES_TOTAL_PATTERN = re.compile(
+	rf"^[ \t]*Totals:\s*({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})(?:\s+{NUMBER})?\s*$",
+	re.MULTILINE | re.IGNORECASE,
+)
+POS_FUEL_ROW_PATTERN = re.compile(
+	rf"^[ \t]*Fuel sales:\s*({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s*$",
 	re.MULTILINE | re.IGNORECASE,
 )
 
@@ -49,7 +71,11 @@ def extract_text(file_obj):
 		raise ReportParseError("PDF support is not installed. Install the project requirements.") from exc
 	try:
 		with pdfplumber.open(file_obj) as pdf:
+			if len(pdf.pages) > MAX_REPORT_PAGES:
+				raise ReportParseError(f"The report must have no more than {MAX_REPORT_PAGES} pages.")
 			return "\n".join(page.extract_text() or "" for page in pdf.pages)
+	except ReportParseError:
+		raise
 	except Exception as exc:
 		raise ReportParseError("The uploaded file could not be read as a PDF.") from exc
 
@@ -66,11 +92,23 @@ def parse_report(text):
 	except ValueError as exc:
 		raise ReportParseError("The report contains an invalid period.") from exc
 
+	transactions_start = text.find("Transactions summary as per POS system")
+	if transactions_start < 0:
+		raise ReportParseError("Transactions summary section not found.")
+	transactions_end = text.find("Fuel Sales Summary", transactions_start)
+	if transactions_end < 0:
+		raise ReportParseError("Fuel Sales Summary section not found.")
+	pos_fuel_match = POS_FUEL_ROW_PATTERN.search(text[transactions_start:transactions_end])
+	if not pos_fuel_match:
+		raise ReportParseError("POS fuel sales value was not found.")
+	pos_fuel_value_exvat = _decimal(pos_fuel_match.group(2))
+
 	section_start = text.find("Electronic totalizer movement")
 	if section_start < 0:
 		raise ReportParseError("Electronic totalizer movement section not found.")
 	section_end = text.find("Sales Report: calculated", section_start)
 	section = text[section_start:] if section_end < 0 else text[section_start:section_end]
+	nozzle_candidates = NOZZLE_ROW_CANDIDATE_PATTERN.findall(section)
 	nozzles = [
 		{
 			"number": int(match.group(1)),
@@ -85,13 +123,22 @@ def parse_report(text):
 	]
 	if not nozzles:
 		raise ReportParseError("No electronic nozzle rows were found in the report.")
+	if len(nozzle_candidates) != len(nozzles):
+		raise ReportParseError("Some numbered electronic nozzle rows could not be read. Check the report grade or layout.")
 	if len({row["number"] for row in nozzles}) != len(nozzles):
 		raise ReportParseError("The report contains duplicate nozzle numbers.")
+	nozzle_totals_match = NOZZLE_TOTAL_PATTERN.search(section)
+	if not nozzle_totals_match:
+		raise ReportParseError("Electronic nozzle totals were not found.")
+	reported_totalizer_litres = _decimal(nozzle_totals_match.group(1))
+	reported_pump_sales_litres = _decimal(nozzle_totals_match.group(2))
 
 	fuel_sales_start = text.find("Fuel Sales Summary")
 	fuel_sales_end = text.find("Payment and Bankable", fuel_sales_start)
 	if fuel_sales_start < 0 or fuel_sales_end < 0:
 		raise ReportParseError("Fuel Sales Summary section not found.")
+	fuel_sales_section = text[fuel_sales_start:fuel_sales_end]
+	fuel_sales_candidates = GRADE_ROW_CANDIDATE_PATTERN.findall(fuel_sales_section)
 	fuel_sales = [
 		{
 			"grade": match.group(1),
@@ -105,6 +152,29 @@ def parse_report(text):
 	]
 	if not fuel_sales:
 		raise ReportParseError("No fuel sales rows were found in the report.")
+	if len(fuel_sales_candidates) != len(fuel_sales):
+		raise ReportParseError("Some fuel sales grade rows could not be read. Check the report grade or layout.")
+	fuel_sales_total_match = FUEL_SALES_TOTAL_PATTERN.search(fuel_sales_section)
+	if not fuel_sales_total_match:
+		raise ReportParseError("Fuel Sales Summary totals were not found.")
+	reported_pos_sales_litres = _decimal(fuel_sales_total_match.group(1))
+
+	payment_start = text.find("Payment and Bankable cash analysis summary")
+	payment_end = text.find("Fuel Sales by Grade", payment_start)
+	if payment_start < 0 or payment_end < 0:
+		raise ReportParseError("Payment and Bankable cash analysis summary section not found.")
+	payment_section = text[payment_start:payment_end]
+	account_matches = re.findall(rf"Total Account:\s*({NUMBER})", payment_section, re.IGNORECASE)
+	payout_matches = re.findall(rf"Total Payouts:\s*({NUMBER})", payment_section, re.IGNORECASE)
+	money_drops_match = re.search(rf"Money Drops for Period:\s*({NUMBER})", payment_section, re.IGNORECASE)
+	if not account_matches or not payout_matches or not money_drops_match:
+		raise ReportParseError("Required cash-up totals were not found in the payment summary.")
+	cash_up = {
+		"forecourt_total": pos_fuel_value_exvat,
+		"safedrops": _decimal(money_drops_match.group(1)),
+		"account_1": _decimal(account_matches[0]),
+		"payout_1": _decimal(payout_matches[0]),
+	}
 
 	opening_start = text.find("Opening Values")
 	closing_start = text.find("Closing Values", opening_start)
@@ -114,12 +184,16 @@ def parse_report(text):
 		match.groups()
 		for match in TANK_READING_PATTERN.finditer(text[opening_start:closing_start])
 	]
+	opening_candidates = TANK_ROW_CANDIDATE_PATTERN.findall(text[opening_start:closing_start])
 	closing_rows = [
 		match.groups()
 		for match in TANK_READING_PATTERN.finditer(text[closing_start:])
 	]
+	closing_candidates = TANK_ROW_CANDIDATE_PATTERN.findall(text[closing_start:])
 	if not opening_rows or len(opening_rows) != len(closing_rows):
 		raise ReportParseError("Opening and closing tank rows do not match.")
+	if len(opening_candidates) != len(opening_rows) or len(closing_candidates) != len(closing_rows):
+		raise ReportParseError("Some tank rows could not be read. Check the report grade or layout.")
 	tank_readings = []
 	grade_positions = {}
 	for opening, closing in zip(opening_rows, closing_rows):
@@ -147,6 +221,18 @@ def parse_report(text):
 			})
 		except ValueError as exc:
 			raise ReportParseError("A tank row contains an invalid date or value.") from exc
+	warnings = []
+	for row in nozzles:
+		if abs((row["closing"] - row["opening"]) - row["totalizer_litres"]) > Decimal("0.01"):
+			warnings.append(f"Nozzle {row['number']}: opening/closing movement does not match the reported totalizer.")
+	if abs(sum((row["totalizer_litres"] for row in nozzles), Decimal("0")) - reported_totalizer_litres) > Decimal("0.01"):
+		raise ReportParseError("Numbered nozzle totalizers do not match the report total.")
+	if abs(sum((row["sales_litres"] for row in nozzles), Decimal("0")) - reported_pump_sales_litres) > Decimal("0.01"):
+		raise ReportParseError("Nozzle fuel sales do not match the pump report total.")
+	if abs(sum((row["litres"] for row in fuel_sales), Decimal("0")) - reported_pos_sales_litres) > Decimal("0.01"):
+		raise ReportParseError("Fuel sales grade rows do not match the POS report total.")
+	if abs(reported_pump_sales_litres - reported_pos_sales_litres) > Decimal("0.01"):
+		warnings.append("Pump fuel sales do not match the POS fuel sales total.")
 	return {
 		"period_from": period_from,
 		"period_to": period_to,
@@ -154,6 +240,8 @@ def parse_report(text):
 		"nozzles": nozzles,
 		"fuel_sales": fuel_sales,
 		"tank_readings": tank_readings,
+		"cash_up": cash_up,
+		"warnings": warnings,
 	}
 
 
