@@ -1,13 +1,34 @@
 from pathlib import Path
 from decouple import AutoConfig, Csv
+from django.core.exceptions import ImproperlyConfigured
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 config = AutoConfig(search_path=BASE_DIR)
-SECRET_KEY = config("FUELLEDGER_SECRET_KEY", default="development-only-change-before-deployment")
-DEBUG = config("FUELLEDGER_DEBUG", default=True, cast=bool)
+SECRET_KEY = config("FUELLEDGER_SECRET_KEY", default="").strip()
+if not SECRET_KEY or SECRET_KEY == "replace-with-a-long-random-secret":
+    raise ImproperlyConfigured("Set FUELLEDGER_SECRET_KEY to a private, random value before starting FuelLedger.")
+
+DEBUG = config("FUELLEDGER_DEBUG", default=False, cast=bool)
 ALLOWED_HOSTS = config("FUELLEDGER_ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv())
 CSRF_TRUSTED_ORIGINS = config("FUELLEDGER_CSRF_TRUSTED_ORIGINS", default="", cast=Csv())
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SECURE_SSL_REDIRECT = not DEBUG
+SECURE_HSTS_SECONDS = 3600 if not DEBUG else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+SECURE_HSTS_PRELOAD = False
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "root": {"handlers": ["console"], "level": "INFO"},
+    "loggers": {
+        "django": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "django.request": {"handlers": ["console"], "level": "ERROR", "propagate": False},
+    },
+}
 
 INSTALLED_APPS = [
     "grappelli",

@@ -52,11 +52,11 @@ class BookInFuelForm(forms.Form):
 				self.fields[field_name] = forms.DecimalField(
 					label="Qty L booked in",
 					required=False,
-					min_value=0,
+					min_value=0.01,
 					max_digits=12,
 					decimal_places=2,
 					initial=initial_delivery.get("quantities", {}).get(tank.pk),
-					widget=forms.NumberInput(attrs={"class": "quantity-input", "min": "0", "step": "0.01"}),
+					widget=forms.NumberInput(attrs={"class": "quantity-input", "min": "0.01", "step": "0.01"}),
 				)
 				tank_fields.append((tank, field_name))
 			self.delivery_fields.append((delivery_number, truck_field, tank_fields))
@@ -119,8 +119,11 @@ class FuelTransferForm(forms.Form):
 		cleaned_data = super().clean()
 		from_tank = cleaned_data.get("from_tank")
 		to_tank = cleaned_data.get("to_tank")
-		if from_tank and to_tank and from_tank.pk == to_tank.pk:
-			self.add_error("to_tank", "Choose a different destination tank.")
+		if from_tank and to_tank:
+			if from_tank.pk == to_tank.pk:
+				self.add_error("to_tank", "Choose a different destination tank.")
+			elif _product_key(from_tank.product) != _product_key(to_tank.product):
+				self.add_error("to_tank", "Fuel can only be transferred between tanks containing the same product.")
 		return cleaned_data
 
 
@@ -406,6 +409,20 @@ class TankReadingForm(SiteReadingForm):
 				initial=tank.capacity_litres,
 			)
 			self.tank_fields.append((tank, dip_field_name, depth_field_name, capacity_field_name))
+
+	def clean(self):
+		cleaned_data = super().clean()
+		for tank, dip_field_name, _, _ in self.tank_fields:
+			capacity = tank.capacity_litres
+			if capacity is None:
+				continue
+			dip = cleaned_data.get(dip_field_name)
+			opening = cleaned_data.get(self.opening_field_names[tank.pk])
+			if dip is not None and dip > capacity:
+				self.add_error(dip_field_name, "The dip reading cannot exceed tank capacity.")
+			if opening is not None and opening > capacity:
+				self.add_error(self.opening_field_names[tank.pk], "The opening dip cannot exceed tank capacity.")
+		return cleaned_data
 
 
 class FuelSalesForm(SiteReadingForm):

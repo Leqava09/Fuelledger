@@ -7,11 +7,14 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 from html import unescape
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from django.contrib import admin
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Group, User
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
+from django.db.models.deletion import ProtectedError
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -52,9 +55,45 @@ class CalculationTests(TestCase):
 
         self.assertEqual(values["difference"], "21.75")
 
+    def test_divide_by_zero_raises_formula_error(self):
+        fields = [
+            CashUpField(key="a", field_type=CashUpField.FieldType.MONEY),
+            CashUpField(key="b", field_type=CashUpField.FieldType.MONEY),
+            CashUpField(key="c", field_type=CashUpField.FieldType.MONEY),
+            CashUpField(key="total", field_type=CashUpField.FieldType.CALCULATED, formula="a / b + c"),
+        ]
+
+        with self.assertRaises(FormulaError):
+            calculate_values(fields, {"a": "1", "b": "0", "c": "2"})
+
+    def test_calculated_values_are_recomputed_and_rounded_before_reuse(self):
+        fields = [
+            CashUpField(key="amount", field_type=CashUpField.FieldType.MONEY),
+            CashUpField(key="third", field_type=CashUpField.FieldType.CALCULATED, formula="amount / 3"),
+            CashUpField(key="tripled", field_type=CashUpField.FieldType.CALCULATED, formula="third * 3"),
+        ]
+
+        values = calculate_values(fields, {"amount": "1", "third": "999", "tripled": "999"})
+
+        self.assertEqual(values["third"], "0.33")
+        self.assertEqual(values["tripled"], "0.99")
+
+    def test_required_blank_input_raises_formula_error(self):
+        fields = [
+            CashUpField(key="amount", label="Amount", field_type=CashUpField.FieldType.MONEY, required=True),
+            CashUpField(key="total", field_type=CashUpField.FieldType.CALCULATED, formula="amount + 1"),
+        ]
+
+        with self.assertRaisesRegex(FormulaError, "Amount is required"):
+            calculate_values(fields, {"amount": ""})
+
     def test_formula_rejects_python_calls(self):
         with self.assertRaises(FormulaError):
             validate_formula("__import__('os')", ["cash"])
+
+    def test_formula_rejects_boolean_constants(self):
+        with self.assertRaises(FormulaError):
+            validate_formula("True", [])
 
 
 class FirstHQUserSetupTests(TestCase):
@@ -263,6 +302,13 @@ class SiteConfigurationAdminTests(TestCase):
         ):
             site.shift_count = shift_count
             self.assertEqual(list(site.get_shift_names()), expected)
+
+    def test_site_slug_collision_gets_unique_suffix(self):
+        first = Site.objects.create(name="Fuel Stop")
+        second = Site.objects.create(name="Fuel-Stop")
+
+        self.assertEqual(first.slug, "fuel-stop")
+        self.assertEqual(second.slug, "fuel-stop-2")
 
     def test_tank_and_nozzle_inline_widgets_are_compact_and_labeled(self):
         tank_form = TankInlineForm()
@@ -481,6 +527,43 @@ class SiteAccessTests(TestCase):
                 f"/sites/{self.site_one.slug}/forms/fuel-readings/{reading_type}/?date={selected_date.isoformat()}&amp;shift=Day",
             )
 
+    def test_report_import_dashboard_button_carries_shift_and_obeys_permissions(self):
+        self.client.force_login(self.site_user)
+        selected_date = timezone.localdate() - timedelta(days=1)
+        dashboard_url = reverse("site-dashboard", args=[self.site_one.slug])
+        importer_url = reverse("fuel-report-import", args=[self.site_one.slug])
+
+        dashboard = self.client.get(dashboard_url, {"date": selected_date.isoformat(), "shift": "Day"})
+        self.assertContains(
+            dashboard,
+            f"{importer_url}?date={selected_date.isoformat()}&amp;shift=Day",
+        )
+        importer = self.client.get(importer_url, {"date": selected_date.isoformat(), "shift": "Day"})
+        self.assertEqual(importer.status_code, 200)
+        self.assertEqual(importer.context["selected_shift"], "Day")
+        self.assertContains(importer, '<option value="Day" selected')
+        electronic_readings = self.client.get(
+            reverse("fuel-reading-entry", args=[self.site_one.slug, "electronic-readings"]),
+            {"date": selected_date.isoformat(), "shift": "Day"},
+        )
+        self.assertNotContains(electronic_readings, importer_url.split("?")[0])
+
+        profile = self.site_user.fuel_profile
+        profile.form_permissions = [
+            permission for permission in profile.form_permissions
+            if permission != "electronic-readings"
+        ]
+        profile.save(update_fields=["form_permissions"])
+        dashboard_without_permission = self.client.get(
+            dashboard_url,
+            {"date": selected_date.isoformat(), "shift": "Day"},
+        )
+        self.assertNotContains(dashboard_without_permission, importer_url)
+        self.assertEqual(
+            self.client.get(importer_url, {"date": selected_date.isoformat(), "shift": "Day"}).status_code,
+            403,
+        )
+
     def test_site_dashboard_shows_forms_only_after_configured_shift_is_selected(self):
         self.site_one.shift_count = 3
         self.site_one.save(update_fields=["shift_count"])
@@ -691,7 +774,8 @@ class SiteAccessTests(TestCase):
         self.site_one.shift_count = 2
         self.site_one.save(update_fields=["shift_count"])
         source = Tank.objects.create(site=self.site_one, name="Tank 1", product="Diesel")
-        destination = Tank.objects.create(site=self.site_one, name="Tank 2", product="Petrol")
+        destination = Tank.objects.create(site=self.site_one, name="Tank 2", product="Diesel")
+        petrol_tank = Tank.objects.create(site=self.site_one, name="Tank 3", product="Petrol")
         other_site_tank = Tank.objects.create(site=self.site_two, name="Other tank", product="Diesel")
         selected_date = timezone.localdate() - timedelta(days=1)
         url = reverse("blank-site-form", args=[self.site_one.slug, "transfer-fuel"])
@@ -703,7 +787,8 @@ class SiteAccessTests(TestCase):
         self.assertContains(page, "From tank")
         self.assertContains(page, "To tank")
         self.assertContains(page, "Tank 1 - Diesel")
-        self.assertContains(page, "Tank 2 - Petrol")
+        self.assertContains(page, "Tank 2 - Diesel")
+        self.assertContains(page, "Tank 3 - Petrol")
         self.assertNotContains(page, str(other_site_tank))
         self.assertContains(page, "Amount (L)")
         self.assertContains(page, "Save and Continue")
@@ -722,6 +807,16 @@ class SiteAccessTests(TestCase):
         })
         self.assertEqual(invalid.status_code, 200)
         self.assertContains(invalid, "Choose a different destination tank.")
+        self.assertEqual(FuelTransfer.objects.count(), 0)
+        invalid_product = self.client.post(f"{url}?date={selected_date.isoformat()}&shift=Night", {
+            "business_date": selected_date.isoformat(),
+            "shift_label": "Night",
+            "from_tank": str(source.pk),
+            "to_tank": str(petrol_tank.pk),
+            "amount_litres": "15.00",
+        })
+        self.assertEqual(invalid_product.status_code, 200)
+        self.assertContains(invalid_product, "same product")
         self.assertEqual(FuelTransfer.objects.count(), 0)
 
         response = self.client.post(f"{url}?date={selected_date.isoformat()}&shift=Night", {
@@ -758,7 +853,7 @@ class SiteAccessTests(TestCase):
         })
         self.assertEqual(history.status_code, 200)
         self.assertContains(history, "Tank 1 - Diesel")
-        self.assertContains(history, "Tank 2 - Petrol")
+        self.assertContains(history, "Tank 2 - Diesel")
         self.assertContains(history, "125.50")
 
     def test_site_forms_and_user_management_link_to_history(self):
@@ -790,6 +885,66 @@ class SiteAccessTests(TestCase):
         self.assertEqual(cash_up_response.status_code, 200)
         self.assertContains(cash_up_response, reverse("site-form-history", args=[self.site_one.slug, "cash-up"]))
         self.assertNotContains(cash_up_response, history_url)
+
+    def test_deleting_site_group_deletes_linked_django_group(self):
+        site_group = SiteGroup.objects.create(site=self.site_one, name="Temporary operators")
+        django_group_id = site_group.django_group_id
+
+        site_group.delete()
+
+        self.assertFalse(SiteGroup.objects.filter(pk=site_group.pk).exists())
+        self.assertFalse(Group.objects.filter(pk=django_group_id).exists())
+
+    def test_site_audit_events_prevent_site_deletion(self):
+        site = Site.objects.create(name="Protected audit site")
+        SiteAuditEvent.objects.create(
+            site=site,
+            category="Test",
+            object_label="Retained event",
+            action="created",
+        )
+
+        with self.assertRaises(ProtectedError):
+            site.delete()
+
+        self.assertTrue(SiteAuditEvent.objects.filter(site=site).exists())
+
+    def test_database_constraints_reject_invalid_fuel_amounts_and_same_tank_transfer(self):
+        tank = Tank.objects.create(site=self.site_one, name="Constraint tank", product="Diesel")
+        invalid_writes = (
+            lambda: FuelBooking.objects.create(
+                site=self.site_one,
+                tank=tank,
+                business_date=timezone.localdate(),
+                shift_label="Day",
+                delivery_number=1,
+                qty_litres=Decimal("0.00"),
+                created_by=self.site_user,
+            ),
+            lambda: FuelTransfer.objects.create(
+                site=self.site_one,
+                from_tank=tank,
+                to_tank=tank,
+                business_date=timezone.localdate(),
+                shift_label="Day",
+                amount_litres=Decimal("1.00"),
+                created_by=self.site_user,
+            ),
+            lambda: FuelTransfer.objects.create(
+                site=self.site_one,
+                from_tank=tank,
+                to_tank=tank,
+                business_date=timezone.localdate(),
+                shift_label="Day",
+                amount_litres=Decimal("0.00"),
+                created_by=self.site_user,
+            ),
+        )
+
+        for create_invalid_record in invalid_writes:
+            with self.subTest(create_invalid_record=create_invalid_record), self.assertRaises(IntegrityError):
+                with transaction.atomic():
+                    create_invalid_record()
 
     def test_site_user_and_group_creation_are_recorded_in_history(self):
         self.site_user.fuel_profile.can_manage_users = True
@@ -1058,6 +1213,147 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.client = Client()
         self.client.force_login(self.user)
         self.business_date = timezone.localdate() - timedelta(days=1)
+
+    def test_tank_dip_cannot_exceed_configured_capacity(self):
+        self.tank.capacity_litres = Decimal("1000.00")
+        self.tank.save(update_fields=["capacity_litres"])
+        reading = DailyFuelReading.objects.create(
+            site=self.site,
+            business_date=self.business_date,
+            shift_label="Night",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        dip = TankDipReading(
+            daily_reading=reading,
+            tank=self.tank,
+            dip_litres=Decimal("1000.01"),
+        )
+
+        with self.assertRaises(ValidationError):
+            dip.full_clean()
+
+    def test_report_import_requires_confirmation_then_saves_mapped_electronic_readings(self):
+        report = {
+            "period_from": datetime(2026, 10, 6, 0, 0),
+            "period_to": datetime(2026, 10, 6, 23, 59, 59),
+            "business_date": date(2026, 10, 6),
+            "fuel_sales": [
+                {"grade": "Diesel", "litres": Decimal("2166.44")},
+                {"grade": "Petrol", "litres": Decimal("837.79")},
+            ],
+            "tank_readings": [
+                {"row": 1, "grade": "Diesel", "grade_index": 1, "opening": Decimal("800.00"), "closing": Decimal("900.00")},
+                {"row": 2, "grade": "Petrol", "grade_index": 1, "opening": Decimal("100.00"), "closing": Decimal("200.00")},
+            ],
+            "nozzles": [
+                {
+                    "number": 1,
+                    "grade": "DIESEL50PPM",
+                    "opening": Decimal("7040.00"),
+                    "closing": Decimal("7667.00"),
+                    "totalizer_litres": Decimal("627.00"),
+                    "sales_litres": Decimal("626.58"),
+                    "variance": Decimal("-0.42"),
+                },
+                {
+                    "number": 2,
+                    "grade": "ULP95",
+                    "opening": Decimal("727245.00"),
+                    "closing": Decimal("727464.00"),
+                    "totalizer_litres": Decimal("219.00"),
+                    "sales_litres": Decimal("218.95"),
+                    "variance": Decimal("-0.05"),
+                },
+            ],
+        }
+        upload_url = f"{reverse('fuel-report-import', args=[self.site.slug])}?date=2026-10-06&shift=Night"
+        upload = SimpleUploadedFile("report.pdf", b"%PDF-report", content_type="application/pdf")
+
+        with patch("ledger.views.parse_pdf", return_value=report):
+            preview = self.client.post(upload_url, {"action": "upload", "shift_label": "Night", "report_pdf": upload})
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertContains(preview, "Review report values")
+        self.assertContains(preview, "full-day report")
+        self.assertFalse(DailyFuelReading.objects.exists())
+        token = preview.context["report_token"]
+        confirmed = self.client.post(upload_url, {
+            "action": "confirm",
+            "selected_date": "2026-10-06",
+            "report_token": token,
+            "shift_label": "Night",
+            "nozzle_1": str(self.nozzle.pk),
+            "nozzle_2": str(self.nozzle_two.pk),
+            "product_diesel": "Diesel",
+            "product_petrol": "Petrol",
+            "tank_diesel_1": str(self.tank.pk),
+            "tank_opening_diesel_1": "800.00",
+            "tank_closing_diesel_1": "900.00",
+            "tank_petrol_1": str(self.tank_two.pk),
+            "tank_opening_petrol_1": "100.00",
+            "tank_closing_petrol_1": "200.00",
+            "remember_mappings": "on",
+        })
+
+        self.assertEqual(confirmed.status_code, 302)
+        reading = DailyFuelReading.objects.get(site=self.site, business_date=date(2026, 10, 6), shift_label="Night")
+        first = reading.nozzle_readings.get(nozzle=self.nozzle)
+        self.assertEqual(first.electronic_opening_reading, Decimal("7040.00"))
+        self.assertEqual(first.electronic_reading, Decimal("7667.00"))
+        second = reading.nozzle_readings.get(nozzle=self.nozzle_two)
+        self.assertEqual(second.electronic_opening_reading, Decimal("727245.00"))
+        self.assertEqual(second.electronic_reading, Decimal("727464.00"))
+        self.assertEqual(reading.fuel_sales, {"Diesel": "2166.44", "Petrol": "837.79"})
+        diesel_dip = reading.tank_readings.get(tank=self.tank)
+        self.assertEqual(diesel_dip.opening_dip_litres, Decimal("800.00"))
+        self.assertEqual(diesel_dip.dip_litres, Decimal("900.00"))
+        petrol_dip = reading.tank_readings.get(tank=self.tank_two)
+        self.assertEqual(petrol_dip.opening_dip_litres, Decimal("100.00"))
+        self.assertEqual(petrol_dip.dip_litres, Decimal("200.00"))
+        self.site.refresh_from_db()
+        self.assertEqual(self.site.report_nozzle_mapping, {"1": self.nozzle.pk, "2": self.nozzle_two.pk})
+        self.assertEqual(self.site.report_product_mapping, {"diesel": "Diesel", "petrol": "Petrol"})
+        self.assertEqual(self.site.report_tank_mapping, {"diesel_1": self.tank.pk, "petrol_1": self.tank_two.pk})
+
+        self.nozzle.name = "Dispenser Alpha"
+        self.nozzle.save(update_fields=["name"])
+        upload = SimpleUploadedFile("report.pdf", b"%PDF-report", content_type="application/pdf")
+        with patch("ledger.views.parse_pdf", return_value=report):
+            next_preview = self.client.post(upload_url, {"action": "upload", "shift_label": "Night", "report_pdf": upload})
+        imported_rows = next_preview.context["report"]["nozzles"]
+        self.assertEqual(imported_rows[0]["selected_nozzle_id"], self.nozzle.pk)
+
+    def test_report_import_rejects_duplicate_nozzle_mappings(self):
+        report = {
+            "period_from": datetime(2026, 10, 6, 0, 0),
+            "period_to": datetime(2026, 10, 6, 23, 59, 59),
+            "business_date": date(2026, 10, 6),
+            "fuel_sales": [{"grade": "Petrol", "litres": Decimal("2.00")}],
+            "tank_readings": [
+                {"row": 1, "grade": "Petrol", "grade_index": 1, "opening": Decimal("1.00"), "closing": Decimal("2.00")},
+            ],
+            "nozzles": [
+                {"number": number, "grade": "ULP93", "opening": Decimal("1.00"), "closing": Decimal("2.00"), "totalizer_litres": Decimal("1.00"), "sales_litres": Decimal("1.00"), "variance": Decimal("0.00")}
+                for number in (1, 2)
+            ],
+        }
+        upload_url = f"{reverse('fuel-report-import', args=[self.site.slug])}?date=2026-10-06&shift=Night"
+        upload = SimpleUploadedFile("report.pdf", b"%PDF-report", content_type="application/pdf")
+        with patch("ledger.views.parse_pdf", return_value=report):
+            preview = self.client.post(upload_url, {"action": "upload", "shift_label": "Night", "report_pdf": upload})
+
+        rejected = self.client.post(upload_url, {
+            "action": "confirm",
+            "report_token": preview.context["report_token"],
+            "shift_label": "Night",
+            "nozzle_1": str(self.nozzle.pk),
+            "nozzle_2": str(self.nozzle.pk),
+        })
+
+        self.assertEqual(rejected.status_code, 200)
+        self.assertContains(rejected, "unique configured nozzle")
+        self.assertFalse(DailyFuelReading.objects.exists())
 
     def test_reading_form_has_four_tabs_with_the_current_form_selected(self):
         response = self.client.get(

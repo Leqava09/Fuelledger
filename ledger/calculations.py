@@ -19,7 +19,7 @@ class FormulaError(ValueError):
 def _evaluate(node, resolve_name):
     if isinstance(node, ast.Expression):
         return _evaluate(node.body, resolve_name)
-    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+    if isinstance(node, ast.Constant) and type(node.value) in (int, float):
         return Decimal(str(node.value))
     if isinstance(node, ast.Name):
         return resolve_name(node.id)
@@ -27,7 +27,7 @@ def _evaluate(node, resolve_name):
         left = _evaluate(node.left, resolve_name)
         right = _evaluate(node.right, resolve_name)
         if isinstance(node.op, ast.Div) and right == 0:
-            return None
+            raise FormulaError("Cannot divide by zero.")
         return _BINARY_OPERATORS[type(node.op)](left, right)
     if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPERATORS:
         value = _evaluate(node.operand, resolve_name)
@@ -49,34 +49,47 @@ def validate_formula(expression, field_keys):
 
 def calculate_values(fields, input_values):
     field_map = {field.key: field for field in fields}
-    results = dict(input_values)
+    calculated_keys = {field.key for field in fields if field.field_type == "calculated"}
+    results = {key: value for key, value in input_values.items() if key not in calculated_keys}
+    calculated_values = {}
     resolving = set()
 
     def resolve_name(key):
-        if key in results:
+        field = field_map.get(key)
+        if field is None:
+            raise FormulaError(f"Missing value for {key}.")
+        if field.field_type != "calculated":
+            if key not in results:
+                raise FormulaError(f"Missing value for {field.label}.")
             value = results[key]
             if value in (None, ""):
+                if field.required:
+                    raise FormulaError(f"{field.label} is required.")
                 return Decimal("0")
             try:
                 return Decimal(str(value))
             except InvalidOperation as exc:
-                raise FormulaError(f"{field_map[key].label} must be numeric for this calculation.") from exc
-        field = field_map.get(key)
-        if field is None or field.field_type != "calculated":
-            raise FormulaError(f"Missing value for {field.label if field else key}.")
+                raise FormulaError(f"{field.label} must be numeric for this calculation.") from exc
+        if key in calculated_values:
+            return calculated_values[key]
         if key in resolving:
             raise FormulaError("Calculated fields cannot refer to themselves or form a cycle.")
         resolving.add(key)
         tree = ast.parse(field.formula, mode="eval")
         value = _evaluate(tree, resolve_name)
         resolving.remove(key)
-        results[key] = "" if value is None else str(value.quantize(Decimal("0.01")))
-        return value
+        quantized = value.quantize(Decimal("0.01"))
+        results[key] = str(quantized)
+        calculated_values[key] = quantized
+        return quantized
 
     try:
         for field in fields:
+            if field.field_type != "calculated" and field.required and input_values.get(field.key) in (None, ""):
+                raise FormulaError(f"{field.label} is required.")
+        for field in fields:
             if field.field_type == "calculated":
                 resolve_name(field.key)
-    except (FormulaError, DivisionByZero, InvalidOperation, ZeroDivisionError) as exc:
+    except (FormulaError, DivisionByZero, InvalidOperation, ZeroDivisionError, TypeError) as exc:
         raise FormulaError(str(exc)) from exc
     return results

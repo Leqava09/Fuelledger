@@ -14,6 +14,7 @@ urlpatterns = [
 	path("sites/<slug:slug>/forms/<slug:form_key>/history/", views.site_form_history, name="site-form-history"),
 	path("sites/<slug:slug>/cash-up-reports/", views.cash_up_reports, name="cash-up-reports"),
 	path("sites/<slug:slug>/fuel-reports/", views.fuel_reports, name="fuel-reports"),
+	path("sites/<slug:slug>/forms/electronic-readings/import-report/", views.fuel_report_import, name="fuel-report-import"),
 	path("sites/<slug:slug>/forms/fuel-readings/<slug:reading_type>/", views.fuel_reading_entry, name="fuel-reading-entry"),
 	path("sites/<slug:slug>/forms/cash-up/<slug:section>/", views.cash_up_entry, name="cash-up-entry"),
 	path("sites/<slug:slug>/forms/daily-fuel-readings/entry/", views.daily_fuel_reading_entry, name="daily-fuel-reading-entry"),

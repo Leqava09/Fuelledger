@@ -6,3 +6,4 @@ db.sqlite3
 fuelledger_data.json
 staticfiles/
 tmp/
+phone_debug*.txt

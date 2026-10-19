@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Import Fuel Report | {{ site.name }}{% endblock %}
+{% block content %}
+<div class="page-heading compact-heading">
+    <div>
+        <div class="eyebrow"><a href="{% url 'fuel-reading-entry' site.slug 'electronic-readings' %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ selected_shift|urlencode }}">Electronic Readings</a> / {{ site.name }}</div>
+        <h1>Import fuel report</h1>
+    </div>
+    <div class="heading-actions"><a class="button secondary" href="{% url 'site-dashboard' site.slug %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ selected_shift|urlencode }}">Cancel</a></div>
+</div>
+{% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
+{% if mode == "review" %}
+<section class="form-section">
+    <div class="form-section-title"><span>01</span><h2>Review report values</h2></div>
+    <p>Report date: <strong>{{ report.business_date }}</strong>. This full-day report imports electronic readings, fuel sales, and tank readings together into the selected shift.</p>
+    <p>Review every mapping and tank value. Nothing is saved until you confirm.</p>
+    <form method="post" class="entry-form">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="confirm">
+        <input type="hidden" name="selected_date" value="{{ selected_date|date:'Y-m-d' }}">
+        <input type="hidden" name="report_token" value="{{ report_token }}">
+        <div class="form-row">
+            <label for="shift-label">Save under shift</label>
+            <select id="shift-label" name="shift_label" required>
+                {% for shift in shift_names %}<option value="{{ shift }}" {% if shift == selected_shift %}selected{% endif %}>{{ shift }}</option>{% endfor %}
+            </select>
+        </div>
+        <div class="reading-table-wrap">
+            <h3>Electronic Readings</h3>
+            <table class="reading-table">
+                <thead><tr><th>Report nozzle</th><th>Grade</th><th>Opening</th><th>Closing</th><th>Sales (L)</th><th>Configured nozzle</th></tr></thead>
+                <tbody>
+                    {% for row in report.nozzles %}
+                    <tr>
+                        <td>{{ row.number }}</td>
+                        <td>{{ row.grade }}</td>
+                        <td>{{ row.opening }}</td>
+                        <td>{{ row.closing }}</td>
+                        <td>{{ row.sales_litres }}</td>
+                        <td>
+                            <select name="nozzle_{{ row.number }}" required aria-label="Map report nozzle {{ row.number }}">
+                                <option value="">Choose nozzle</option>
+                                {% for nozzle in nozzle_choices %}<option value="{{ nozzle.id }}" {% if nozzle.id|stringformat:"s" == row.selected_nozzle_id|stringformat:"s" %}selected{% endif %}>{{ nozzle.label }}</option>{% endfor %}
+                            </select>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="reading-table-wrap">
+            <h3>Fuel Sales</h3>
+            <table class="reading-table">
+                <thead><tr><th>Report grade</th><th>Sales (L)</th><th>Configured product</th></tr></thead>
+                <tbody>
+                    {% for row in report.fuel_sales %}
+                    <tr>
+                        <td>{{ row.grade }}</td>
+                        <td>{{ row.litres }}</td>
+                        <td>
+                            <select name="product_{{ row.mapping_key }}" required aria-label="Map fuel sales grade {{ row.grade }}">
+                                <option value="">Choose product</option>
+                                {% for product in product_choices %}<option value="{{ product.value }}" {% if product.value == row.selected_product %}selected{% endif %}>{{ product.label }}</option>{% endfor %}
+                            </select>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="reading-table-wrap">
+            <h3>Tank Readings</h3>
+            <table class="reading-table">
+                <thead><tr><th>Report grade</th><th>Opening (L)</th><th>Closing (L)</th><th>Configured tank</th></tr></thead>
+                <tbody>
+                    {% for row in report.tank_readings %}
+                    <tr>
+                        <td>{{ row.grade }} {{ row.grade_index }}</td>
+                        <td><input type="number" name="tank_opening_{{ row.mapping_key }}" value="{{ row.opening }}" min="0" step="0.01" required aria-label="Opening tank volume for {{ row.grade }} {{ row.grade_index }}"></td>
+                        <td><input type="number" name="tank_closing_{{ row.mapping_key }}" value="{{ row.closing }}" min="0" step="0.01" required aria-label="Closing tank volume for {{ row.grade }} {{ row.grade_index }}"></td>
+                        <td>
+                            <select name="tank_{{ row.mapping_key }}" required aria-label="Map tank reading {{ row.grade }} {{ row.grade_index }}">
+                                <option value="">Choose tank</option>
+                                {% for tank in tank_choices %}<option value="{{ tank.id }}" {% if tank.id|stringformat:"s" == row.selected_tank_id|stringformat:"s" %}selected{% endif %}>{{ tank.label }}</option>{% endfor %}
+                            </select>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="form-row"><label><input type="checkbox" name="remember_mappings" checked> Remember these nozzle matches for future reports</label></div>
+        <button class="button primary" type="submit">Import all three modules</button>
+    </form>
+</section>
+{% else %}
+<section class="form-section">
+    <div class="form-section-title"><span>01</span><h2>Select report PDF</h2></div>
+    <p>Text-based POS reports are parsed locally by the application. Image-only scans need OCR and are not supported by this importer.</p>
+    <form method="post" enctype="multipart/form-data" class="entry-form">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="upload">
+        <input type="hidden" name="selected_date" value="{{ selected_date|date:'Y-m-d' }}">
+        <div class="form-row">
+            <label for="shift-label">Save under shift</label>
+            <select id="shift-label" name="shift_label" required>
+                <option value="">Choose shift</option>
+                {% for shift in shift_names %}<option value="{{ shift }}" {% if shift == selected_shift %}selected{% endif %}>{{ shift }}</option>{% endfor %}
+            </select>
+        </div>
+        <div class="form-row">
+            <label for="report-pdf">Business Analysis Report PDF</label>
+            <input id="report-pdf" type="file" name="report_pdf" accept="application/pdf,.pdf" required>
+        </div>
+        <button class="button primary" type="submit">Read and review PDF</button>
+    </form>
+</section>
+{% endif %}
+{% endblock %}

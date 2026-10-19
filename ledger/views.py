@@ -8,6 +8,7 @@ from django.contrib.auth import login as auth_login
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
 from django.contrib import messages
+from django.core import signing
 from django.db import connection, transaction
 from django.db.models import Q
 from django.http import Http404, HttpResponseForbidden
@@ -38,6 +39,7 @@ from .models import (
 	FuelBooking,
 	FuelTransfer,
 	NozzleFuelReading,
+	Nozzle,
 	ShiftEntry,
 	Site,
 	SiteAuditEvent,
@@ -46,6 +48,7 @@ from .models import (
 	UserProfile,
 )
 from .models import SITE_FORM_PERMISSION_CHOICES
+from .report_parser import ReportParseError, parse_pdf
 
 
 SITE_FORM_LABELS = {
@@ -294,6 +297,10 @@ def site_dashboard(request, slug):
 			if _site_uses_fuel_reading(site, key)
 			and (key in permissions or (key == "fuel-sales" and "tank-reading" in permissions))
 		],
+		"can_import_fuel_report": (
+			all(_site_uses_fuel_reading(site, key) for key in ("electronic-readings", "fuel-sales", "tank-reading"))
+			and all(_can_access_site_form(request.user, site, key) for key in ("electronic-readings", "fuel-sales", "tank-reading"))
+		),
 		"cash_up_tabs": [
 			{"key": key, "label": tab_label}
 			for key, tab_label in _cash_up_tab_labels(site)
@@ -341,7 +348,7 @@ def _transfer_fuel(request, selected_date, shift_label):
 	)
 	if request.method == "POST" and form.is_valid():
 		save_mode = request.POST.get("save_mode", "tab")
-		transfer = FuelTransfer.objects.create(
+		transfer = FuelTransfer(
 			site=site,
 			from_tank=form.cleaned_data["from_tank"],
 			to_tank=form.cleaned_data["to_tank"],
@@ -350,6 +357,8 @@ def _transfer_fuel(request, selected_date, shift_label):
 			amount_litres=form.cleaned_data["amount_litres"],
 			created_by=request.user,
 		)
+		transfer.full_clean()
+		transfer.save()
 		_record_audit(
 			site,
 			request.user,
@@ -437,9 +446,7 @@ def _book_in_fuel(request, label, selected_date, today, shift_label):
 				quantity = form.cleaned_data[field_name]
 				if quantity is not None:
 					saved_deliveries.append((delivery_number, truck_reference, tank, quantity))
-		with transaction.atomic():
-			FuelBooking.objects.filter(site=site, business_date=selected_date, shift_label=shift_label).delete()
-			FuelBooking.objects.bulk_create([
+		bookings_to_create = [
 				FuelBooking(
 					site=site,
 					tank=tank,
@@ -451,7 +458,12 @@ def _book_in_fuel(request, label, selected_date, today, shift_label):
 					created_by=request.user,
 				)
 				for delivery_number, truck_reference, tank, quantity in saved_deliveries
-			])
+		]
+		with transaction.atomic():
+			FuelBooking.objects.filter(site=site, business_date=selected_date, shift_label=shift_label).delete()
+			for booking in bookings_to_create:
+				booking.full_clean()
+			FuelBooking.objects.bulk_create(bookings_to_create)
 		_record_audit(
 			site,
 			request.user,
@@ -1187,15 +1199,18 @@ def _complete_cash_up_save(request, site, record, before, updated_values, select
 	airtime_sequence_issues = airtime_sequence_issues or []
 	with transaction.atomic():
 		if record is None:
-			record = CashUpShiftRecord.objects.create(
+			record = CashUpShiftRecord(
 				site=site,
 				business_date=selected_date,
 				shift_label=shift_label,
 				created_by=request.user,
 				values=updated_values,
 			)
+			record.full_clean()
+			record.save()
 		else:
 			record.values = updated_values
+			record.full_clean()
 			record.save(update_fields=["values", "updated_at"])
 		if airtime_sequence_checked:
 			issue_by_index = {issue["card_index"]: issue for issue in airtime_sequence_issues}
@@ -1478,6 +1493,387 @@ def daily_fuel_reading_entry(request, slug):
 	)
 
 
+def _report_nozzle_mapping(site, report_rows, selected_ids=None):
+	configured_nozzles = [
+		(nozzle, tank)
+		for tank in site.tanks.prefetch_related("nozzles").all()
+		for nozzle in tank.nozzles.all()
+	]
+	nozzle_choices = [
+		{
+			"id": nozzle.pk,
+			"label": f"{nozzle.name} / {tank.name} / {tank.product}",
+		}
+		for nozzle, tank in configured_nozzles
+	]
+	by_number = {}
+	for nozzle, _ in configured_nozzles:
+		match = re.search(r"(\d+)\s*$", nozzle.name)
+		if match:
+			by_number.setdefault(int(match.group(1)), []).append(nozzle.pk)
+	used_ids = set()
+	for row in report_rows:
+		selected_id = (selected_ids or {}).get(row["number"])
+		if selected_id is None:
+			stored_id = site.report_nozzle_mapping.get(str(row["number"]))
+			if stored_id is not None and any(nozzle.pk == stored_id for nozzle, _ in configured_nozzles):
+				selected_id = stored_id
+		if selected_id is None:
+			matches = by_number.get(row["number"], [])
+			selected_id = matches[0] if len(matches) == 1 and matches[0] not in used_ids else ""
+		if selected_id in used_ids:
+			selected_id = ""
+		row["selected_nozzle_id"] = selected_id
+		if selected_id:
+			used_ids.add(selected_id)
+	return nozzle_choices
+
+
+def _report_grade_key(grade):
+	return re.sub(r"[^a-z0-9]", "", grade.casefold())
+
+
+def _report_product_mapping(site, report_rows, selected_products=None):
+	products = _site_fuel_products(list(site.tanks.all()))
+	product_keys = {}
+	for product in products:
+		product_keys.setdefault(_report_grade_key(product), []).append(product)
+	choices = [{"value": product, "label": product} for product in products]
+	for row in report_rows:
+		mapping_key = _report_grade_key(row["grade"])
+		selected = (selected_products or {}).get(mapping_key)
+		if selected not in products:
+			selected = site.report_product_mapping.get(mapping_key)
+		if selected not in products:
+			matches = product_keys.get(mapping_key, [])
+			selected = matches[0] if len(matches) == 1 else ""
+		row["mapping_key"] = mapping_key
+		row["selected_product"] = selected or ""
+	return choices
+
+
+def _report_tank_mapping(site, report_rows, selected_tanks=None):
+	tanks = list(site.tanks.order_by("name"))
+	choices = [{"id": tank.pk, "label": f"{tank.name} / {tank.product}"} for tank in tanks]
+	used_ids = set()
+	for row in report_rows:
+		mapping_key = f"{_report_grade_key(row['grade'])}_{row['grade_index']}"
+		selected = (selected_tanks or {}).get(mapping_key)
+		if selected is None:
+			selected = site.report_tank_mapping.get(mapping_key)
+		try:
+			selected = int(selected)
+		except (TypeError, ValueError):
+			selected = None
+		if selected not in {tank.pk for tank in tanks} or selected in used_ids:
+			selected = None
+		if selected is None:
+			grade_matches = [
+				tank.pk for tank in tanks
+				if _report_grade_key(tank.product) == _report_grade_key(row["grade"])
+			]
+			if len(grade_matches) == 1 and grade_matches[0] not in used_ids:
+				selected = grade_matches[0]
+		row["mapping_key"] = mapping_key
+		row["selected_tank_id"] = selected or ""
+		if selected:
+			used_ids.add(selected)
+	return choices
+
+
+def _report_review_context(site, report, shift_label, selected_nozzles=None, selected_products=None, selected_tanks=None):
+	nozzle_choices = _report_nozzle_mapping(site, report["nozzles"], selected_nozzles)
+	product_choices = _report_product_mapping(site, report["fuel_sales"], selected_products)
+	tank_choices = _report_tank_mapping(site, report["tank_readings"], selected_tanks)
+	return {
+		"site": site,
+		"mode": "review",
+		"report": report,
+		"report_token": signing.dumps(report, salt="fuel-report-import"),
+		"shift_names": site.get_shift_names(),
+		"selected_date": date.fromisoformat(report["business_date"]),
+		"selected_shift": shift_label,
+		"nozzle_choices": nozzle_choices,
+		"product_choices": product_choices,
+		"tank_choices": tank_choices,
+	}
+
+
+@login_required
+def fuel_report_import(request, slug):
+	site = request.current_site
+	required_reading_types = ("electronic-readings", "fuel-sales", "tank-reading")
+	if not all(_site_uses_fuel_reading(site, key) for key in required_reading_types):
+		raise Http404
+	if not all(_can_access_site_form(request.user, site, key) for key in required_reading_types):
+		return HttpResponseForbidden("Your account needs access to electronic readings, fuel sales, and tank readings to import this report.")
+
+	shift_names = site.get_shift_names()
+	selected_date, _ = _selected_business_date(request)
+	selected_shift = request.GET.get("shift", "")
+	if selected_shift not in shift_names:
+		selected_shift = ""
+	context_error = None
+	if request.method == "POST" and request.POST.get("selected_date"):
+		try:
+			selected_date = date.fromisoformat(request.POST["selected_date"])
+		except ValueError:
+			context_error = "Choose a valid business date from the dashboard."
+	context = {
+		"site": site,
+		"shift_names": shift_names,
+		"selected_date": selected_date,
+		"selected_shift": selected_shift,
+		"mode": "upload",
+	}
+	if context_error:
+		context["error"] = context_error
+		return render(request, "ledger/fuel_report_import.html", context)
+	if request.method != "POST":
+		return render(request, "ledger/fuel_report_import.html", context)
+
+	if request.POST.get("action") == "confirm":
+		try:
+			payload = signing.loads(request.POST.get("report_token", ""), salt="fuel-report-import", max_age=900)
+		except signing.BadSignature:
+			context["error"] = "This review has expired or is invalid. Upload the PDF again."
+			return render(request, "ledger/fuel_report_import.html", context)
+		if payload.get("site_id") != site.pk:
+			context["error"] = "This report was prepared for a different site. Upload it again here."
+			return render(request, "ledger/fuel_report_import.html", context)
+		try:
+			business_date = date.fromisoformat(payload["business_date"])
+		except (KeyError, TypeError, ValueError):
+			context["error"] = "The report date is invalid. Upload the PDF again."
+			return render(request, "ledger/fuel_report_import.html", context)
+		shift_label = request.POST.get("shift_label", "")
+		if business_date != selected_date or business_date > timezone.localdate() or shift_label not in shift_names:
+			context["error"] = "Choose a valid shift for a report date that is not in the future."
+			return render(request, "ledger/fuel_report_import.html", context)
+
+		configured_nozzles = {
+			nozzle.pk: nozzle
+			for nozzle in Nozzle.objects.filter(tank__site=site).select_related("tank")
+		}
+		configured_tanks = {tank.pk: tank for tank in site.tanks.all()}
+		products = _site_fuel_products(list(configured_tanks.values()))
+		selected_nozzle_rows = []
+		selected_nozzle_ids = set()
+		selected_product_rows = []
+		selected_product_keys = set()
+		selected_tank_rows = []
+		selected_tank_ids = set()
+		selected_nozzles = {}
+		selected_products = {}
+		selected_tanks = {}
+		try:
+			for row in payload["nozzles"]:
+				nozzle_id = int(request.POST.get(f"nozzle_{row['number']}", ""))
+				opening = Decimal(row["opening"]).quantize(Decimal("0.01"))
+				closing = Decimal(row["closing"]).quantize(Decimal("0.01"))
+				if nozzle_id not in configured_nozzles or nozzle_id in selected_nozzle_ids:
+					raise ValueError
+				if opening < 0 or closing < opening or opening.adjusted() > 11 or closing.adjusted() > 11:
+					raise ValueError
+				selected_nozzle_ids.add(nozzle_id)
+				selected_nozzles[row["number"]] = nozzle_id
+				selected_nozzle_rows.append((nozzle_id, opening, closing))
+
+			for row in payload["fuel_sales"]:
+				product_key = row["mapping_key"]
+				product = request.POST.get(f"product_{product_key}", "")
+				litres = Decimal(row["litres"]).quantize(Decimal("0.01"))
+				if product not in products or product_key in selected_product_keys or litres < 0:
+					raise ValueError
+				selected_product_keys.add(product_key)
+				selected_products[product_key] = product
+				selected_product_rows.append((product, litres))
+
+			for row in payload["tank_readings"]:
+				mapping_key = row["mapping_key"]
+				tank_id = int(request.POST.get(f"tank_{mapping_key}", ""))
+				opening = Decimal(request.POST.get(f"tank_opening_{mapping_key}", row["opening"])).quantize(Decimal("0.01"))
+				closing = Decimal(request.POST.get(f"tank_closing_{mapping_key}", row["closing"])).quantize(Decimal("0.01"))
+				if tank_id not in configured_tanks or tank_id in selected_tank_ids:
+					raise ValueError
+				tank = configured_tanks[tank_id]
+				if opening < 0 or closing < 0 or opening.adjusted() > 9 or closing.adjusted() > 9:
+					raise ValueError
+				if tank.capacity_litres is not None and (opening > tank.capacity_litres or closing > tank.capacity_litres):
+					raise ValueError
+				selected_tank_ids.add(tank_id)
+				selected_tanks[mapping_key] = tank_id
+				row["opening"] = str(opening)
+				row["closing"] = str(closing)
+				selected_tank_rows.append((tank_id, opening, closing))
+		except (KeyError, TypeError, ValueError, ArithmeticError):
+			context.update(_report_review_context(
+				site,
+				payload,
+				shift_label,
+				selected_nozzles,
+				selected_products,
+				selected_tanks,
+			))
+			context["report_token"] = request.POST.get("report_token", "")
+			context["error"] = "Each report nozzle must map to a unique configured nozzle. Check product and tank matches; tank values must be nonnegative and within capacity, and closing totalizers cannot be below opening values. No data was imported."
+			return render(request, "ledger/fuel_report_import.html", context)
+
+		with transaction.atomic():
+			reading, created = DailyFuelReading.objects.get_or_create(
+				site=site,
+				business_date=business_date,
+				shift_label=shift_label,
+				defaults={"created_by": request.user, "updated_by": request.user},
+			)
+			if not created:
+				reading.updated_by = request.user
+			reading.full_clean()
+			if not created:
+				reading.save(update_fields=["updated_by", "updated_at"])
+			existing = {
+				item.nozzle_id: item
+				for item in reading.nozzle_readings.filter(nozzle_id__in=selected_nozzle_ids)
+			}
+			existing_tanks = {
+				item.tank_id: item
+				for item in reading.tank_readings.filter(tank_id__in=selected_tank_ids)
+			}
+			before = {
+				"electronic_readings": {
+				str(nozzle_id): {
+					"opening_reading": str(existing[nozzle_id].electronic_opening_reading) if existing.get(nozzle_id) and existing[nozzle_id].electronic_opening_reading is not None else None,
+					"reading": str(existing[nozzle_id].electronic_reading) if existing.get(nozzle_id) and existing[nozzle_id].electronic_reading is not None else None,
+				}
+				for nozzle_id, _, _ in selected_nozzle_rows
+				},
+				"fuel_sales": dict(reading.fuel_sales),
+				"tank_readings": {
+					str(tank_id): {
+						"opening_dip_litres": str(existing_tanks[tank_id].opening_dip_litres) if existing_tanks.get(tank_id) and existing_tanks[tank_id].opening_dip_litres is not None else None,
+						"dip_litres": str(existing_tanks[tank_id].dip_litres) if existing_tanks.get(tank_id) else None,
+					}
+					for tank_id, _, _ in selected_tank_rows
+				},
+			}
+			for nozzle_id, opening, closing in selected_nozzle_rows:
+				previous = existing.get(nozzle_id)
+				nozzle_reading = previous or NozzleFuelReading(daily_reading=reading, nozzle_id=nozzle_id)
+				nozzle_reading.electronic_opening_reading = opening
+				nozzle_reading.electronic_reading = closing
+				if previous is None:
+					nozzle_reading.mechanical_opening_reading = None
+					nozzle_reading.mechanical_reading = None
+				nozzle_reading.full_clean()
+				nozzle_reading.save()
+			for tank_id, opening, closing in selected_tank_rows:
+				tank_reading = existing_tanks.get(tank_id) or TankDipReading(
+					daily_reading=reading,
+					tank_id=tank_id,
+				)
+				tank_reading.opening_dip_litres = opening
+				tank_reading.dip_litres = closing
+				tank_reading.full_clean()
+				tank_reading.save()
+			reading.fuel_sales = {product: str(litres) for product, litres in selected_product_rows}
+			reading.full_clean()
+			reading.save(update_fields=["fuel_sales", "updated_by", "updated_at"])
+			after = {
+				"electronic_readings": {
+				str(nozzle_id): {"opening_reading": str(opening), "reading": str(closing)}
+				for nozzle_id, opening, closing in selected_nozzle_rows
+				},
+				"fuel_sales": dict(reading.fuel_sales),
+				"tank_readings": {
+					str(tank_id): {"opening_dip_litres": str(opening), "dip_litres": str(closing)}
+					for tank_id, opening, closing in selected_tank_rows
+				},
+			}
+			if request.POST.get("remember_mappings") == "on":
+				nozzle_mapping = dict(site.report_nozzle_mapping)
+				nozzle_mapping.update({str(row["number"]): nozzle_id for row, (nozzle_id, _, _) in zip(payload["nozzles"], selected_nozzle_rows)})
+				product_mapping = dict(site.report_product_mapping)
+				product_mapping.update(selected_products)
+				tank_mapping = dict(site.report_tank_mapping)
+				tank_mapping.update(selected_tanks)
+				site.report_nozzle_mapping = nozzle_mapping
+				site.report_product_mapping = product_mapping
+				site.report_tank_mapping = tank_mapping
+				site.save(update_fields=["report_nozzle_mapping", "report_product_mapping", "report_tank_mapping"])
+			_record_audit(
+				site,
+				request.user,
+				"Fuel Report Import",
+				f"{business_date.isoformat()} / {shift_label}",
+				"updated" if not created or any(value["reading"] is not None for value in before["electronic_readings"].values()) else "created",
+				before=before,
+				after=after,
+			)
+		messages.success(request, "Imported electronic readings, fuel sales, and tank readings from the report.")
+		return redirect(
+			f"{reverse('fuel-reading-entry', args=[site.slug, 'electronic-readings'])}"
+			f"?date={business_date.isoformat()}&shift={shift_label}"
+		)
+
+	upload = request.FILES.get("report_pdf")
+	shift_label = request.POST.get("shift_label", "")
+	context["selected_shift"] = shift_label
+	if shift_label not in shift_names:
+		context["error"] = "Select a shift for this report."
+		return render(request, "ledger/fuel_report_import.html", context)
+	if upload is None or not upload.name.lower().endswith(".pdf"):
+		context["error"] = "Choose a PDF Business Analysis Report."
+		return render(request, "ledger/fuel_report_import.html", context)
+	if upload.size > 10 * 1024 * 1024:
+		context["error"] = "The PDF must be 10 MB or smaller."
+		return render(request, "ledger/fuel_report_import.html", context)
+	if upload.read(5) != b"%PDF-":
+		context["error"] = "The selected file does not appear to be a PDF."
+		return render(request, "ledger/fuel_report_import.html", context)
+	upload.seek(0)
+	try:
+		report = parse_pdf(upload)
+	except ReportParseError as exc:
+		context["error"] = str(exc)
+		return render(request, "ledger/fuel_report_import.html", context)
+	if report["period_to"] < report["period_from"] or report["period_to"].date() != report["business_date"]:
+		context["error"] = "The report period is invalid or spans multiple business dates."
+		return render(request, "ledger/fuel_report_import.html", context)
+	if report["business_date"] > timezone.localdate():
+		context["error"] = "Reports dated in the future cannot be imported."
+		return render(request, "ledger/fuel_report_import.html", context)
+	if report["business_date"] != selected_date:
+		context["error"] = "The PDF report date does not match the business date selected on the dashboard."
+		return render(request, "ledger/fuel_report_import.html", context)
+
+	serializable_report = {
+		"site_id": site.pk,
+		"business_date": report["business_date"].isoformat(),
+		"period_from": report["period_from"].isoformat(sep=" "),
+		"period_to": report["period_to"].isoformat(sep=" "),
+		"nozzles": [
+			{key: str(value) if isinstance(value, Decimal) else value for key, value in row.items()}
+			for row in report["nozzles"]
+		],
+		"fuel_sales": [
+			{"grade": row["grade"], "litres": str(row["litres"])}
+			for row in report["fuel_sales"]
+		],
+		"tank_readings": [
+			{
+				"row": row["row"],
+				"grade": row["grade"],
+				"grade_index": row["grade_index"],
+				"opening": str(row["opening"]),
+				"closing": str(row["closing"]),
+			}
+			for row in report["tank_readings"]
+		],
+	}
+	context.update(_report_review_context(site, serializable_report, shift_label))
+	return render(request, "ledger/fuel_report_import.html", context)
+
+
 @login_required
 def fuel_reading_entry(request, slug, reading_type):
 	form_label = FUEL_READING_FORM_LABELS.get(reading_type)
@@ -1612,15 +2008,18 @@ def fuel_reading_entry(request, slug, reading_type):
 				}
 			with transaction.atomic():
 				if reading is None:
-					reading = DailyFuelReading.objects.create(
+					reading = DailyFuelReading(
 						site=site,
 						business_date=form.cleaned_data["business_date"],
 						shift_label=shift_label,
 						created_by=request.user,
 						updated_by=request.user,
 					)
+					reading.full_clean()
+					reading.save()
 				else:
 					reading.updated_by = request.user
+					reading.full_clean()
 					reading.save(update_fields=["updated_by", "updated_at"])
 				if reading_type == "tank-reading":
 					for tank, dip_field_name, depth_field_name, capacity_field_name in form.tank_fields:
@@ -1631,11 +2030,13 @@ def fuel_reading_entry(request, slug, reading_type):
 						if tank.pk not in previous_tank_values:
 							opening_field_name = form.opening_field_names[tank.pk]
 							defaults["opening_dip_litres"] = form.cleaned_data[opening_field_name]
-						TankDipReading.objects.update_or_create(
-							daily_reading=reading,
-							tank=tank,
-							defaults=defaults,
-						)
+						dip_reading = TankDipReading.objects.filter(daily_reading=reading, tank=tank).first()
+						if dip_reading is None:
+							dip_reading = TankDipReading(daily_reading=reading, tank=tank)
+						for field_name, value in defaults.items():
+							setattr(dip_reading, field_name, value)
+						dip_reading.full_clean()
+						dip_reading.save()
 				elif reading_type == "fuel-sales":
 					reading.fuel_sales = {
 						product: str(form.cleaned_data[field_name] or 0)
@@ -1655,11 +2056,13 @@ def fuel_reading_entry(request, slug, reading_type):
 						if nozzle.pk not in previous_nozzle_readings:
 							baseline_form_field = form.opening_field_names[nozzle.pk]
 							defaults[opening_field] = form.cleaned_data[baseline_form_field]
-						NozzleFuelReading.objects.update_or_create(
-							daily_reading=reading,
-							nozzle=nozzle,
-							defaults=defaults,
-						)
+						nozzle_reading = NozzleFuelReading.objects.filter(daily_reading=reading, nozzle=nozzle).first()
+						if nozzle_reading is None:
+							nozzle_reading = NozzleFuelReading(daily_reading=reading, nozzle=nozzle)
+						for field_name, value in defaults.items():
+							setattr(nozzle_reading, field_name, value)
+						nozzle_reading.full_clean()
+						nozzle_reading.save()
 			if reading_type == "tank-reading":
 				after = {
 					str(item.tank_id): {

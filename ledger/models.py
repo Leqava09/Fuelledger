@@ -2,7 +2,12 @@ from django.conf import settings
 from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 from django.utils.text import slugify
+
+
+SHIFT_LABEL_MAX_LENGTH = 60
 
 
 SITE_FORM_PERMISSION_CHOICES = [
@@ -42,6 +47,9 @@ class Site(models.Model):
 	use_fuel_sales = models.BooleanField(default=True, verbose_name="Fuel Sales")
 	use_mechanical_readings = models.BooleanField(default=True, verbose_name="Mechanical Readings")
 	use_electronic_readings = models.BooleanField(default=True, verbose_name="Electronic Readings")
+	report_nozzle_mapping = models.JSONField(default=dict, blank=True)
+	report_product_mapping = models.JSONField(default=dict, blank=True)
+	report_tank_mapping = models.JSONField(default=dict, blank=True)
 	is_active = models.BooleanField(default=True)
 	created_at = models.DateTimeField(auto_now_add=True)
 
@@ -50,7 +58,12 @@ class Site(models.Model):
 
 	def save(self, *args, **kwargs):
 		if not self.slug:
-			self.slug = slugify(self.name)
+			base_slug = slugify(self.name) or "site"
+			self.slug = base_slug
+			suffix = 2
+			while Site.objects.filter(slug=self.slug).exclude(pk=self.pk).exists():
+				self.slug = f"{base_slug}-{suffix}"
+				suffix += 1
 		super().save(*args, **kwargs)
 
 	def __str__(self):
@@ -82,7 +95,15 @@ class Tank(models.Model):
 		ordering = ["name"]
 		constraints = [
 			models.UniqueConstraint(fields=["site", "name"], name="unique_tank_name_per_site"),
+			models.CheckConstraint(
+				condition=models.Q(capacity_litres__isnull=True) | models.Q(capacity_litres__gt=0),
+				name="tank_capacity_positive",
+			),
 		]
+
+	def clean(self):
+		if self.capacity_litres is not None and self.capacity_litres <= 0:
+			raise ValidationError({"capacity_litres": "Tank capacity must be greater than zero."})
 
 	def __str__(self):
 		display_name = self.name if self.name.casefold().startswith("tank ") else f"Tank {self.name}"
@@ -142,7 +163,7 @@ class FuelBooking(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="fuel_bookings")
 	tank = models.ForeignKey(Tank, on_delete=models.PROTECT, related_name="fuel_bookings")
 	business_date = models.DateField()
-	shift_label = models.CharField(max_length=30)
+	shift_label = models.CharField(max_length=SHIFT_LABEL_MAX_LENGTH)
 	delivery_number = models.PositiveSmallIntegerField(default=1, choices=DELIVERY_NUMBER_CHOICES)
 	truck_reference = models.CharField(max_length=50, blank=True, verbose_name="Truck / delivery reference")
 	qty_litres = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="Qty L booked in")
@@ -158,6 +179,10 @@ class FuelBooking(models.Model):
 				condition=models.Q(delivery_number__gte=1, delivery_number__lte=5),
 				name="fuel_booking_delivery_number_range",
 			),
+			models.CheckConstraint(
+				condition=models.Q(qty_litres__gt=0),
+				name="fuel_booking_positive_quantity",
+			),
 		]
 
 	def clean(self):
@@ -165,6 +190,8 @@ class FuelBooking(models.Model):
 			raise ValidationError({"tank": "The selected tank must belong to this site."})
 		if self.site_id and self.shift_label not in self.site.get_shift_names():
 			raise ValidationError({"shift_label": "Select a shift configured for this site."})
+		if self.qty_litres is not None and self.qty_litres <= 0:
+			raise ValidationError({"qty_litres": "Enter a quantity greater than zero."})
 		if not 1 <= self.delivery_number <= self.MAX_DELIVERIES_PER_SHIFT:
 			raise ValidationError({"delivery_number": "Delivery number must be between 1 and 5."})
 
@@ -177,23 +204,37 @@ class FuelTransfer(models.Model):
 	from_tank = models.ForeignKey(Tank, on_delete=models.PROTECT, related_name="fuel_transfers_from")
 	to_tank = models.ForeignKey(Tank, on_delete=models.PROTECT, related_name="fuel_transfers_to")
 	business_date = models.DateField()
-	shift_label = models.CharField(max_length=30)
+	shift_label = models.CharField(max_length=SHIFT_LABEL_MAX_LENGTH)
 	amount_litres = models.DecimalField(max_digits=11, decimal_places=2, verbose_name="Amount (L)")
 	created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="fuel_transfers_created")
 	created_at = models.DateTimeField(auto_now_add=True)
 
 	class Meta:
 		ordering = ["-business_date", "shift_label", "created_at"]
+		constraints = [
+			models.CheckConstraint(
+				condition=models.Q(amount_litres__gt=0),
+				name="fuel_transfer_positive_amount",
+			),
+			models.CheckConstraint(
+				condition=~models.Q(from_tank=models.F("to_tank")),
+				name="fuel_transfer_distinct_tanks",
+			),
+		]
 
 	def clean(self):
 		if self.site_id and self.shift_label not in self.site.get_shift_names():
 			raise ValidationError({"shift_label": "Select a shift configured for this site."})
+		if self.amount_litres is not None and self.amount_litres <= 0:
+			raise ValidationError({"amount_litres": "Enter an amount greater than zero."})
 		if self.site_id and self.from_tank_id and self.from_tank.site_id != self.site_id:
 			raise ValidationError({"from_tank": "The selected tank must belong to this site."})
 		if self.site_id and self.to_tank_id and self.to_tank.site_id != self.site_id:
 			raise ValidationError({"to_tank": "The selected tank must belong to this site."})
 		if self.from_tank_id and self.to_tank_id and self.from_tank_id == self.to_tank_id:
 			raise ValidationError({"to_tank": "Choose a different destination tank."})
+		if self.from_tank_id and self.to_tank_id and self.from_tank.product.strip().casefold() != self.to_tank.product.strip().casefold():
+			raise ValidationError({"to_tank": "Fuel can only be transferred between tanks containing the same product."})
 
 	def __str__(self):
 		return f"{self.site} / {self.business_date} / {self.shift_label} / {self.from_tank} to {self.to_tank} / {self.amount_litres} L"
@@ -289,7 +330,7 @@ class ShiftEntry(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="shift_entries")
 	form = models.ForeignKey(CashUpForm, on_delete=models.PROTECT, related_name="entries")
 	business_date = models.DateField()
-	shift_label = models.CharField(max_length=60)
+	shift_label = models.CharField(max_length=SHIFT_LABEL_MAX_LENGTH)
 	created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="fuel_shift_entries")
 	status = models.CharField(max_length=12, choices=Status.choices, default=Status.SUBMITTED)
 	values = models.JSONField(default=dict)
@@ -313,7 +354,7 @@ class ShiftEntry(models.Model):
 class CashUpShiftRecord(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="cash_up_records")
 	business_date = models.DateField()
-	shift_label = models.CharField(max_length=60)
+	shift_label = models.CharField(max_length=SHIFT_LABEL_MAX_LENGTH)
 	created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="cash_up_records_created")
 	values = models.JSONField(default=dict, blank=True)
 	created_at = models.DateTimeField(auto_now_add=True)
@@ -365,7 +406,7 @@ class AirtimeSequenceAlert(models.Model):
 class DailyFuelReading(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="daily_fuel_readings")
 	business_date = models.DateField()
-	shift_label = models.CharField(max_length=30)
+	shift_label = models.CharField(max_length=SHIFT_LABEL_MAX_LENGTH)
 	created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="daily_fuel_readings_created")
 	updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="daily_fuel_readings_updated")
 	fuel_sales = models.JSONField(default=dict, blank=True)
@@ -396,7 +437,26 @@ class TankDipReading(models.Model):
 	class Meta:
 		constraints = [
 			models.UniqueConstraint(fields=["daily_reading", "tank"], name="unique_tank_dip_per_daily_reading"),
+			models.CheckConstraint(
+				condition=models.Q(dip_litres__gte=0)
+				| models.Q(dip_litres__isnull=True),
+				name="tank_dip_nonnegative",
+			),
+			models.CheckConstraint(
+				condition=models.Q(opening_dip_litres__isnull=True) | models.Q(opening_dip_litres__gte=0),
+				name="tank_opening_dip_nonnegative",
+			),
 		]
+
+	def clean(self):
+		if self.daily_reading_id and self.tank_id and self.daily_reading.site_id != self.tank.site_id:
+			raise ValidationError({"tank": "The selected tank must belong to the reading site."})
+		if self.tank_id and self.tank.capacity_litres is not None:
+			capacity = self.tank.capacity_litres
+			if self.dip_litres is not None and self.dip_litres > capacity:
+				raise ValidationError({"dip_litres": "The dip reading cannot exceed tank capacity."})
+			if self.opening_dip_litres is not None and self.opening_dip_litres > capacity:
+				raise ValidationError({"opening_dip_litres": "The opening dip cannot exceed tank capacity."})
 
 
 class NozzleFuelReading(models.Model):
@@ -410,7 +470,20 @@ class NozzleFuelReading(models.Model):
 	class Meta:
 		constraints = [
 			models.UniqueConstraint(fields=["daily_reading", "nozzle"], name="unique_nozzle_reading_per_daily_reading"),
+			models.CheckConstraint(
+				condition=(
+					(models.Q(mechanical_opening_reading__isnull=True) | models.Q(mechanical_opening_reading__gte=0))
+					& (models.Q(mechanical_reading__isnull=True) | models.Q(mechanical_reading__gte=0))
+					& (models.Q(electronic_opening_reading__isnull=True) | models.Q(electronic_opening_reading__gte=0))
+					& (models.Q(electronic_reading__isnull=True) | models.Q(electronic_reading__gte=0))
+				),
+				name="nozzle_values_nonnegative",
+			),
 		]
+
+	def clean(self):
+		if self.daily_reading_id and self.nozzle_id and self.daily_reading.site_id != self.nozzle.tank.site_id:
+			raise ValidationError({"nozzle": "The selected nozzle must belong to the reading site."})
 
 
 class SiteGroup(models.Model):
@@ -450,7 +523,7 @@ class SiteAuditEvent(models.Model):
 		SITE = "SITE", "Site workflow"
 		HQ = "HQ", "Head office"
 
-	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="audit_events")
+	site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="audit_events")
 	actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="fuel_audit_events")
 	origin = models.CharField(max_length=4, choices=Origin.choices, default=Origin.SITE)
 	category = models.CharField(max_length=40)
@@ -465,3 +538,9 @@ class SiteAuditEvent(models.Model):
 
 	def __str__(self):
 		return f"{self.action}: {self.object_label}"
+
+
+@receiver(post_delete, sender=SiteGroup)
+def delete_site_group_auth_group(sender, instance, **kwargs):
+	if instance.django_group_id:
+		Group.objects.filter(pk=instance.django_group_id).delete()

@@ -2,7 +2,7 @@
 
 Standalone Django application for site-based fuel station cash-up and shift records. It does not import or modify Foodline Control.
 
-The cPanel deployment targets Python 3.11, Django 5.1.6, and PostgreSQL 13 to match the existing hosting environment. Django 5.1 is out of security support; plan to upgrade the host database and Django before treating this as a long-term production configuration.
+The cPanel deployment targets Python 3.11, Django 5.1.6, and PostgreSQL 13 to match the existing hosting environment. Django 5.1 is out of security support. PostgreSQL 13 is also end-of-life, and Django 5.2 requires PostgreSQL 14 or newer, so upgrade the hosted database before upgrading Django and treating this as a supported long-term production configuration.
 
 FuelLedger uses PostgreSQL only. It defaults to a separate database named `fuelledger`; configure its connection with the `FUELLEDGER_DATABASE_*` settings in `.env` or the process environment. Copy `.env.example` to `.env` and provide the PostgreSQL connection values for local use and deployment. Do not set its database name to Foodline's `foodlinecontrol` database.
 
