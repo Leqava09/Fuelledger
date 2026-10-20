@@ -46,6 +46,10 @@ POS_FUEL_ROW_PATTERN = re.compile(
 	rf"^[ \t]*Fuel sales:\s*({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s*$",
 	re.MULTILINE | re.IGNORECASE,
 )
+TOTAL_CREDIT_CARD_PATTERN = re.compile(
+	rf"Total\s+Credit\s+Card\s*:?\s*({NUMBER})",
+	re.IGNORECASE,
+)
 
 
 class ReportParseError(ValueError):
@@ -167,6 +171,7 @@ def parse_report(text):
 	account_matches = re.findall(rf"Total Account:\s*({NUMBER})", payment_section, re.IGNORECASE)
 	payout_matches = re.findall(rf"Total Payouts:\s*({NUMBER})", payment_section, re.IGNORECASE)
 	money_drops_match = re.search(rf"Money Drops for Period:\s*({NUMBER})", payment_section, re.IGNORECASE)
+	credit_card_match = TOTAL_CREDIT_CARD_PATTERN.search(payment_section)
 	if not account_matches or not payout_matches or not money_drops_match:
 		raise ReportParseError("Required cash-up totals were not found in the payment summary.")
 	cash_up = {
@@ -174,6 +179,7 @@ def parse_report(text):
 		"safedrops": _decimal(money_drops_match.group(1)),
 		"account_1": _decimal(account_matches[0]),
 		"payout_1": _decimal(payout_matches[0]),
+		"credit_card_total": _decimal(credit_card_match.group(1)) if credit_card_match else None,
 	}
 
 	opening_start = text.find("Opening Values")

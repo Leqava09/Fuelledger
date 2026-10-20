@@ -23,6 +23,7 @@ ULP93                                  175.360              4700.00             
 Totals:           801.940             24469.60                    .00               123.00
 Payment and Bankable cash analysis summary
 Total Account:                2162.20                    Total Cash:                 29564.84              Money Drops:                25130.00
+Total Credit Card:             18250.35
 Total Payouts:                 2142.45
 Money Drops for Period:                  25130.00
 Fuel Sales by Grade
@@ -57,6 +58,7 @@ ULP93                    1235.25 @ 2026-10-06 04:55:00         64.75            
 		self.assertEqual(parsed["cash_up"]["safedrops"], Decimal("25130.00"))
 		self.assertEqual(parsed["cash_up"]["account_1"], Decimal("2162.20"))
 		self.assertEqual(parsed["cash_up"]["payout_1"], Decimal("2142.45"))
+		self.assertEqual(parsed["cash_up"]["credit_card_total"], Decimal("18250.35"))
 		self.assertEqual(parsed["warnings"], [])
 
 	def test_rejects_unrecognized_numbered_nozzle_rows(self):
@@ -77,6 +79,13 @@ ULP93                    1235.25 @ 2026-10-06 04:55:00         64.75            
 		parsed = parse_report(text)
 
 		self.assertTrue(any("Pump fuel sales" in warning for warning in parsed["warnings"]))
+
+	def test_credit_card_total_is_optional_when_report_omits_it(self):
+		text = self.REPORT_TEXT.replace("Total Credit Card:             18250.35\n", "")
+
+		parsed = parse_report(text)
+
+		self.assertIsNone(parsed["cash_up"]["credit_card_total"])
 
 	def test_enforces_pdf_page_limit(self):
 		pdfplumber = ModuleType("pdfplumber")

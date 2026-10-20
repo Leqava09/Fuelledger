@@ -57,6 +57,20 @@ h2 { margin: 0; font: 600 19px/1.2 Cambria, Georgia, serif; letter-spacing: 0; }
 .hq-sites-section { max-width: 1050px; margin: 0 auto; }
 .hq-sites-heading { display: flex; align-items: baseline; justify-content: center; gap: 12px; margin-bottom: 18px; }
 .hq-sites-heading > span { color: var(--muted); font-size: 12px; }
+.hq-notification-center { margin-bottom: 28px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
+.hq-notification-center > summary, .hq-notification-site > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; font-weight: 700; }
+.hq-notification-center > summary { color: var(--teal-dark); font-size: 18px; }
+.hq-notification-center > summary span + span, .hq-notification-site > summary span + span { color: var(--muted); font-size: 12px; }
+.hq-notification-sites { display: grid; gap: 10px; margin-top: 16px; }
+.hq-notification-site { padding: 10px 12px; border: 1px solid var(--line); border-radius: 4px; background: #f8fbf9; }
+.hq-notification-list { display: grid; gap: 10px; margin-top: 12px; }
+.hq-notification-card { padding: 12px; border: 1px solid #e2d8ea; border-radius: 4px; background: white; }
+.hq-notification-card h3 { margin: 0 0 6px; font: 600 16px Cambria, Georgia, serif; }
+.hq-notification-card p { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+.hq-notification-card dl { display: flex; flex-wrap: wrap; gap: 12px 22px; margin: 8px 0; }
+.hq-notification-card dl div { display: flex; gap: 6px; }
+.hq-notification-card dt { color: var(--muted); }
+.hq-notification-card dd { margin: 0; font-weight: 700; }
 .hq-site-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 320px)); justify-content: center; gap: 16px; }
 .hq-site-card { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
 .hq-site-picture { display: flex; align-items: center; justify-content: center; aspect-ratio: 2.5 / 1; background-position: center; background-size: cover; background-color: var(--mint); text-decoration: none; }
@@ -171,6 +185,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .calculated-row small { color: var(--teal); font-size: 10px; }
 .cash-up-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px 18px; }
 .cash-up-fields--stacked { grid-template-columns: minmax(0, 1fr); max-width: 600px; }
+.card-machine-entry { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px 18px; }
 .currency-input-line, .calculated-money { display: flex; align-items: stretch; min-width: 0; }
 .currency-input-line { max-width: 360px; }
 .currency-prefix { min-width: 46px; display: inline-flex; align-items: center; justify-content: center; padding: 0 10px; border: 1px solid #cbd8d3; border-right: 0; color: var(--muted); background: #f2f6f3; font-size: 13px; font-weight: 700; }
@@ -184,6 +199,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .airtime-shift-number { display: grid; justify-items: center; gap: 8px; }
 .airtime-shift-number label { color: var(--muted); font-size: 12px; font-weight: 700; }
 .airtime-shift-number-input { width: 16ch !important; max-width: 100%; text-align: center; letter-spacing: 1px; }
+.card-machine-batch-input { width: 30ch !important; max-width: 100%; }
 .airtime-difference { max-width: 600px; }
 .airtime-repeat-fields { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); max-width: none; align-items: start; justify-content: center; }
 .airtime-repeat-entry { position: relative; width: 100%; max-width: 600px; min-width: 0; justify-self: center; padding: 14px; border: 1px solid var(--line); border-radius: 4px; background: #fbfdfb; }
@@ -198,6 +214,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .cash-up-summary-row--total { margin-top: 12px; border-top: 2px solid var(--teal); border-bottom: 2px solid var(--teal); background: #edf7f2; }
 .cash-up-summary-row--sales { font-weight: 700; }
 .cash-up-summary-row--difference { margin-top: 8px; border-left: 3px solid var(--coral); }
+.cash-up-summary-row--airtime { margin-top: 8px; border: 1px solid #b494d1; color: #563b70; background: #f5eef9; }
 .cash-up-difference--nonzero { color: #873b28 !important; background: #fff0e9 !important; font-weight: 700; }
 .cash-up-difference--zero { color: #17664f !important; background: #e9f6ef !important; font-weight: 700; }
 .cash-up-report-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr)); align-items: end; gap: 12px; }
@@ -343,5 +360,6 @@ tbody tr:last-child td { border-bottom: 0; }
     .form-launcher-buttons { align-items: stretch; flex-direction: column; }
     .tank-reading-grid { grid-template-columns: 1fr; }
     .cash-up-fields { grid-template-columns: 1fr; }
+    .card-machine-entry { grid-template-columns: 1fr; }
     .hq-admin-links { width: 100%; justify-content: center; }
 }

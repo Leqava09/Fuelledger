@@ -13,60 +13,46 @@
     <a class="button secondary" href="{% url 'admin:ledger_site_changelist' %}">Site administration</a>
 </nav>
 {% endif %}
-<section class="hq-sites-section airtime-alert-section" aria-labelledby="airtime-alert-heading">
-    <div class="hq-sites-heading">
-        <h2 id="airtime-alert-heading">Airtime number alerts</h2>
-        <span>{{ pending_airtime_alerts|length }} pending</span>
-    </div>
-    {% if pending_airtime_alerts %}
-    <div class="table-wrap">
-        <table>
-            <thead><tr><th>Site</th><th>Date</th><th>Shift</th><th>Card</th><th>Previous</th><th>Expected</th><th>Entered</th><th>Flagged by</th><th>Action</th></tr></thead>
-            <tbody>
-                {% for alert in pending_airtime_alerts %}
-                <tr>
-                    <td>{{ alert.site.name }}</td>
-                    <td>{{ alert.cash_up_record.business_date|date:"d M Y" }}</td>
-                    <td>{{ alert.cash_up_record.shift_label }}</td>
-                    <td>{{ alert.card_index }}</td>
-                    <td>{{ alert.previous_number|default:"-" }}</td>
-                    <td>{{ alert.expected_number|default:"-" }}</td>
-                    <td>{{ alert.entered_number|default:"-" }}</td>
-                    <td>{{ alert.flagged_by.get_full_name|default:alert.flagged_by.username }}</td>
-                    <td><form method="post" action="{% url 'approve-airtime-alert' alert.pk %}">{% csrf_token %}<button class="button secondary" type="submit" name="approved" value="true">Approve / Clear</button></form></td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    {% else %}<p class="empty-state">No Airtime number alerts need review.</p>{% endif %}
-</section>
-<section class="hq-sites-section airtime-alert-section" aria-labelledby="fuel-reading-alert-heading">
-    <div class="hq-sites-heading">
-        <h2 id="fuel-reading-alert-heading">Fuel reading opening mismatches</h2>
-        <span>{{ pending_fuel_reading_alerts|length }} pending</span>
-    </div>
-    {% if pending_fuel_reading_alerts %}
-    <div class="table-wrap">
-        <table>
-            <thead><tr><th>Site</th><th>Date</th><th>Shift</th><th>Nozzle</th><th>Previous closing</th><th>Imported opening</th><th>Flagged by</th><th>Action</th></tr></thead>
-            <tbody>
-                {% for alert in pending_fuel_reading_alerts %}
-                <tr>
-                    <td>{{ alert.site.name }}</td>
-                    <td>{{ alert.daily_reading.business_date|date:"d M Y" }}</td>
-                    <td>{{ alert.daily_reading.shift_label }}</td>
-                    <td>{{ alert.nozzle.name }}</td>
-                    <td>{{ alert.previous_reading }}</td>
-                    <td>{{ alert.entered_opening }}</td>
-                    <td>{{ alert.flagged_by.get_full_name|default:alert.flagged_by.username }}</td>
-                    <td><form method="post" action="{% url 'approve-fuel-reading-alert' alert.pk %}">{% csrf_token %}<button class="button secondary" type="submit">Approve / Clear</button></form></td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    {% else %}<p class="empty-state">No fuel reading opening mismatches need review.</p>{% endif %}
+<section class="hq-sites-section hq-notification-section" aria-labelledby="notification-center-heading">
+    <details class="hq-notification-center">
+        <summary><span id="notification-center-heading">Notification Center</span><span>{{ notification_count }} pending</span></summary>
+        {% if notification_groups %}
+        <div class="hq-notification-sites">
+            {% for group in notification_groups %}
+            <details class="hq-notification-site">
+                <summary><span>{{ group.site.name }}</span><span>{{ group.notifications|length }} notification{{ group.notifications|length|pluralize }}</span></summary>
+                <div class="hq-notification-list">
+                    {% for notification in group.notifications %}
+                    {% with alert=notification.alert %}
+                    <article class="hq-notification-card">
+                        {% if notification.kind == "airtime" %}
+                        <h3>Airtime number alert</h3>
+                        <p>{{ alert.cash_up_record.business_date|date:"d M Y" }} / {{ alert.cash_up_record.shift_label }} / Card {{ alert.card_index }}</p>
+                        <dl><div><dt>Previous</dt><dd>{{ alert.previous_number|default:"-" }}</dd></div><div><dt>Expected</dt><dd>{{ alert.expected_number|default:"-" }}</dd></div><div><dt>Entered</dt><dd>{{ alert.entered_number|default:"-" }}</dd></div></dl>
+                        <p>Flagged by {{ alert.flagged_by.get_full_name|default:alert.flagged_by.username }}</p>
+                        <form method="post" action="{% url 'approve-airtime-alert' alert.pk %}">{% csrf_token %}<button class="button secondary" type="submit">Approve / Clear</button></form>
+                        {% elif notification.kind == "card_machine" %}
+                        <h3>Card machine batch number alert</h3>
+                        <p>{{ alert.cash_up_record.business_date|date:"d M Y" }} / {{ alert.cash_up_record.shift_label }} / {{ alert.card_machine.serial_number }}</p>
+                        <dl><div><dt>Previous</dt><dd>{{ alert.previous_number|default:"-" }}</dd></div><div><dt>Expected</dt><dd>{{ alert.expected_number|default:"-" }}</dd></div><div><dt>Entered</dt><dd>{{ alert.entered_number|default:"-" }}</dd></div></dl>
+                        <p>Flagged by {{ alert.flagged_by.get_full_name|default:alert.flagged_by.username }}</p>
+                        <form method="post" action="{% url 'approve-card-machine-alert' alert.pk %}">{% csrf_token %}<button class="button secondary" type="submit">Approve / Clear</button></form>
+                        {% else %}
+                        <h3>Fuel reading opening mismatch</h3>
+                        <p>{{ alert.daily_reading.business_date|date:"d M Y" }} / {{ alert.daily_reading.shift_label }} / Nozzle {{ alert.nozzle.name }}</p>
+                        <dl><div><dt>Previous closing</dt><dd>{{ alert.previous_reading }}</dd></div><div><dt>Imported opening</dt><dd>{{ alert.entered_opening }}</dd></div></dl>
+                        <p>Flagged by {{ alert.flagged_by.get_full_name|default:alert.flagged_by.username }}</p>
+                        <form method="post" action="{% url 'approve-fuel-reading-alert' alert.pk %}">{% csrf_token %}<button class="button secondary" type="submit">Approve / Clear</button></form>
+                        {% endif %}
+                    </article>
+                    {% endwith %}
+                    {% endfor %}
+                </div>
+            </details>
+            {% endfor %}
+        </div>
+        {% else %}<p class="empty-state">No notifications need review.</p>{% endif %}
+    </details>
 </section>
 <section class="hq-sites-section" aria-labelledby="hq-sites-heading">
     <div class="hq-sites-heading">

@@ -19,7 +19,6 @@ from .models import (
 	Site,
 	SiteAuditEvent,
 	SiteGroup,
-	SpeedPoint,
 	Tank,
 	TankDipReading,
 	UserProfile,
@@ -104,9 +103,9 @@ class NozzleInlineForm(forms.ModelForm):
 		fields = ("name",)
 
 
-class SpeedPointInlineForm(forms.ModelForm):
+class CardMachineInlineForm(forms.ModelForm):
 	class Meta:
-		model = SpeedPoint
+		model = ManualShopPoint
 		fields = ("point_id", "serial_number")
 		widgets = {
 			"point_id": forms.TextInput(attrs={"size": 10, "style": "width: 10ch; max-width: 100%;"}),
@@ -563,24 +562,14 @@ class TankInline(nested_admin.NestedStackedInline):
 	verbose_name_plural = "Tanks"
 
 
-class EFTDrivewayInline(nested_admin.NestedTabularInline):
-	model = SpeedPoint
-	form = SpeedPointInlineForm
-	extra = 0
-	classes = ("fuel-eft-driveway-inline",)
-	fields = ("point_id", "serial_number")
-	verbose_name = "EFT"
-	verbose_name_plural = "EFT"
-
-
 class ManualShopPointInline(nested_admin.NestedTabularInline):
 	model = ManualShopPoint
-	form = SpeedPointInlineForm
+	form = CardMachineInlineForm
 	extra = 0
 	classes = ("fuel-manual-shop-inline",)
 	fields = ("point_id", "serial_number")
-	verbose_name = "Manual"
-	verbose_name_plural = "Manual"
+	verbose_name = "Card Machine"
+	verbose_name_plural = "Card Machines"
 
 
 class CashUpAdditionalInline(nested_admin.NestedTabularInline):
@@ -608,7 +597,7 @@ class SiteAdminForm(forms.ModelForm):
 class SiteAdmin(nested_admin.NestedModelAdmin):
 	form = SiteAdminForm
 	change_form_template = "admin/ledger/site/change_form.html"
-	inlines = (TankInline, EFTDrivewayInline, ManualShopPointInline, CashUpAdditionalInline)
+	inlines = (TankInline, ManualShopPointInline, CashUpAdditionalInline)
 	list_display = ("name", "currency", "manager_name", "contact_number", "contact_email", "is_active")
 	search_fields = ("name", "currency", "address", "contact_email", "contact_number", "manager_name")
 	list_filter = ("is_active",)
@@ -617,6 +606,7 @@ class SiteAdmin(nested_admin.NestedModelAdmin):
 		("Contact Details", {"fields": ("manager_name", "contact_number", "contact_email")}),
 		("Shifts", {"fields": ("shift_count",)}),
 		("Readings used by site", {"fields": ("use_tank_readings", "use_fuel_sales", "use_mechanical_readings", "use_electronic_readings")}),
+		("Cash-up options", {"fields": ("use_airtime",)}),
 		("Address", {"fields": ("address",)}),
 	)
 
@@ -649,10 +639,10 @@ class SiteAdmin(nested_admin.NestedModelAdmin):
 		before = {}
 		if change:
 			original = Site.objects.get(pk=obj.pk)
-			tracked_fields = ("name", "currency", "image", "address", "contact_number", "contact_email", "manager_name", "shift_count", "use_tank_readings", "use_fuel_sales", "use_mechanical_readings", "use_electronic_readings", "is_active")
+			tracked_fields = ("name", "currency", "image", "address", "contact_number", "contact_email", "manager_name", "shift_count", "use_tank_readings", "use_fuel_sales", "use_mechanical_readings", "use_electronic_readings", "use_airtime", "is_active")
 			before = {name: str(getattr(original, name)) for name in tracked_fields}
 		super().save_model(request, obj, form, change)
-		after = {name: str(getattr(obj, name)) for name in ("name", "currency", "image", "address", "contact_number", "contact_email", "manager_name", "shift_count", "use_tank_readings", "use_fuel_sales", "use_mechanical_readings", "use_electronic_readings", "is_active")}
+		after = {name: str(getattr(obj, name)) for name in ("name", "currency", "image", "address", "contact_number", "contact_email", "manager_name", "shift_count", "use_tank_readings", "use_fuel_sales", "use_mechanical_readings", "use_electronic_readings", "use_airtime", "is_active")}
 		if not change or form.changed_data:
 			_record_admin_audit(obj, request.user, "Site", obj.name, "changed" if change else "created", before, after)
 

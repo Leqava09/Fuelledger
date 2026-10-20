@@ -46,13 +46,28 @@ if (cashUpForm) {
 		total.textContent = Array.from(inputs).reduce((sum, input) => sum + (Number.parseFloat(input.value) || 0), 0).toFixed(2);
 		if (group === "sales_account" || group === "arrears_account") updateCombinedSalesTotal();
 	};
+	const updateCardMachineDifference = () => {
+		const posTotal = cashUpForm.querySelector("[data-pos-card-total]");
+		const difference = cashUpForm.querySelector("[data-card-pos-difference]");
+		const machineTotal = cashUpForm.querySelector('[data-cash-up-total="manual-shop"]');
+		if (!posTotal || !difference || !machineTotal) return;
+		if (posTotal.dataset.posCardTotal === "") {
+			difference.textContent = "Not available";
+			return;
+		}
+		const posAmount = Number.parseFloat(posTotal.dataset.posCardTotal);
+		const machineAmount = Number.parseFloat(machineTotal.textContent);
+		if (Number.isFinite(posAmount) && Number.isFinite(machineAmount)) {
+			difference.textContent = (machineAmount - posAmount).toFixed(2);
+		}
+	};
 	const updateAirtimeDifference = () => {
 		cashUpForm.querySelectorAll('[data-repeat-container="airtime"] [data-repeat-row]').forEach((row) => {
 			const difference = row.querySelector("[data-airtime-difference]");
 			const slip = row.querySelector('input[name^="airtime_slip"]');
 			const system = row.querySelector('input[name^="airtime_system"]');
 			if (difference && slip && system) {
-				difference.textContent = ((Number.parseFloat(slip.value) || 0) - (Number.parseFloat(system.value) || 0)).toFixed(2);
+				difference.textContent = ((Number.parseFloat(system.value) || 0) - (Number.parseFloat(slip.value) || 0)).toFixed(2);
 			}
 		});
 	};
@@ -81,6 +96,7 @@ if (cashUpForm) {
 	};
 	const updateAllTotals = () => {
 		cashUpForm.querySelectorAll("[data-cash-up-total]").forEach((total) => updateSectionTotal(total.dataset.cashUpTotal));
+		updateCardMachineDifference();
 		updateAirtimeDifference();
 		updateAirtimeBalance();
 	};
@@ -197,6 +213,7 @@ if (cashUpForm) {
 	cashUpForm.addEventListener("input", (event) => {
 		const group = event.target.dataset.cashUpTotalInput;
 		if (group) updateSectionTotal(group);
+		if (group === "manual-shop") updateCardMachineDifference();
 		if (event.target.name?.startsWith("airtime_shift_nr")) {
 			const confirmation = getControl("airtime_sequence_confirmed");
 			if (confirmation) confirmation.value = "";

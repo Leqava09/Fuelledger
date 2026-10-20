@@ -47,6 +47,7 @@ class Site(models.Model):
 	use_fuel_sales = models.BooleanField(default=True, verbose_name="Fuel Sales")
 	use_mechanical_readings = models.BooleanField(default=True, verbose_name="Mechanical Readings")
 	use_electronic_readings = models.BooleanField(default=True, verbose_name="Electronic Readings")
+	use_airtime = models.BooleanField(default=True, verbose_name="Airtime")
 	report_nozzle_mapping = models.JSONField(default=dict, blank=True)
 	report_product_mapping = models.JSONField(default=dict, blank=True)
 	report_tank_mapping = models.JSONField(default=dict, blank=True)
@@ -142,11 +143,13 @@ class SpeedPoint(models.Model):
 
 class ManualShopPoint(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="manual_shop_points")
-	point_id = models.CharField(max_length=10, verbose_name="Manual no/ID")
-	serial_number = models.CharField(max_length=30, verbose_name="Manual Serial No")
+	point_id = models.CharField(max_length=10, verbose_name="Card Machine no/ID")
+	serial_number = models.CharField(max_length=30, verbose_name="Card Machine Serial No")
 
 	class Meta:
 		ordering = ["point_id"]
+		verbose_name = "Card Machine"
+		verbose_name_plural = "Card Machines"
 		constraints = [
 			models.UniqueConstraint(fields=["site", "point_id"], name="unique_manual_shop_point_id_per_site"),
 			models.UniqueConstraint(fields=["site", "serial_number"], name="unique_manual_shop_serial_per_site"),
@@ -401,6 +404,35 @@ class AirtimeSequenceAlert(models.Model):
 
 	def __str__(self):
 		return f"{self.site} / {self.cash_up_record.business_date} / {self.cash_up_record.shift_label} / Airtime {self.card_index}"
+
+
+class CardMachineBatchSequenceAlert(models.Model):
+	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="card_machine_batch_alerts")
+	cash_up_record = models.ForeignKey(CashUpShiftRecord, on_delete=models.CASCADE, related_name="card_machine_batch_alerts")
+	card_machine = models.ForeignKey(ManualShopPoint, on_delete=models.CASCADE, related_name="batch_sequence_alerts")
+	previous_number = models.CharField(max_length=30, blank=True)
+	expected_number = models.CharField(max_length=30, blank=True)
+	entered_number = models.CharField(max_length=30, blank=True)
+	flagged_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="card_machine_batch_alerts_flagged")
+	approved = models.BooleanField(default=False)
+	approved_by = models.ForeignKey(
+		settings.AUTH_USER_MODEL,
+		null=True,
+		blank=True,
+		on_delete=models.SET_NULL,
+		related_name="card_machine_batch_alerts_approved",
+	)
+	created_at = models.DateTimeField(auto_now_add=True)
+	approved_at = models.DateTimeField(null=True, blank=True)
+
+	class Meta:
+		ordering = ["-created_at"]
+		constraints = [
+			models.UniqueConstraint(fields=["cash_up_record", "card_machine"], name="unique_cashup_card_machine_batch_alert"),
+		]
+
+	def __str__(self):
+		return f"{self.site} / {self.cash_up_record.business_date} / {self.cash_up_record.shift_label} / {self.card_machine} batch mismatch"
 
 
 class FuelReadingSequenceAlert(models.Model):

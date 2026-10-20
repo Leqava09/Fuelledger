@@ -55,6 +55,7 @@
         <div class="cash-up-summary-row cash-up-summary-row--total"><span>Total Amount Accounted For</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_accounted_total|floatformat:2 }}</strong></div>
         <div class="cash-up-summary-row cash-up-summary-row--sales"><span>Total Sales</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_total_sales|floatformat:2 }}</strong></div>
         <div class="cash-up-summary-row cash-up-summary-row--difference {% if summary_difference %}cash-up-difference--nonzero{% else %}cash-up-difference--zero{% endif %}"><span>Difference (Accounted For - Total Sales)</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_difference|floatformat:2 }}</strong></div>
+        {% if site.use_airtime %}<div class="cash-up-summary-row cash-up-summary-row--airtime"><span>Total Airtime Slip</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_airtime_slip_total|floatformat:2 }}</strong></div>{% endif %}
     </div>
 </section>
 <section class="cash-up-report-detail-section{% if report_start != report_end %} cash-up-report-detail-section--new-page{% endif %}">
@@ -63,9 +64,9 @@
     <div class="table-wrap cash-up-report-table-wrap">
         <table class="cash-up-report-table">
             <thead><tr>
-                <th>Date</th><th>Shift</th><th>Total Cash</th><th>Total Vouchers</th><th>Sales + Arrears</th><th>Total EFT</th><th>Total Manual</th>
+                <th>Date</th><th>Shift</th><th>Total Cash</th><th>Total Vouchers</th><th>Sales + Arrears</th><th>Total Card Machines</th>
                 {% if additional_enabled %}<th>Total Additional</th>{% endif %}
-                <th>Airtime Slip</th><th>Total Payouts</th><th>Amount Accounted</th><th>Total Sales</th><th>Difference</th>
+                {% if site.use_airtime %}<th>Airtime Slip</th>{% endif %}<th>Total Payouts</th><th>Amount Accounted</th><th>Total Sales</th><th>Difference</th>
             </tr></thead>
             <tbody>
                 {% for row in report_rows %}
@@ -74,10 +75,9 @@
                     <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.cash|floatformat:2 }}</td>
                     <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.vouchers|floatformat:2 }}</td>
                     <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.accounts|floatformat:2 }}</td>
-                    <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.eft|floatformat:2 }}</td>
                     <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.manual|floatformat:2 }}</td>
                     {% if additional_enabled %}<td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.additional|floatformat:2 }}</td>{% endif %}
-                    <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.airtime_slip|floatformat:2 }}</td>
+                    {% if site.use_airtime %}<td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.airtime_slip|floatformat:2 }}</td>{% endif %}
                     <td class="cash-up-report-payout">{% if site.currency %}{{ site.currency }} {% endif %}{{ row.amounts.payouts|floatformat:2 }}</td>
                     <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.accounted_total|floatformat:2 }}</td>
                     <td>{% if site.currency %}{{ site.currency }} {% endif %}{{ row.total_sales|floatformat:2 }}</td>

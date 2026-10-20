@@ -8,7 +8,7 @@ from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Permission, User
 from django.utils import timezone
 
-from .models import CashUpAdditional, FuelBooking, ManualShopPoint, SITE_FORM_PERMISSION_CHOICES, SiteGroup, SpeedPoint, Tank
+from .models import CashUpAdditional, FuelBooking, ManualShopPoint, SITE_FORM_PERMISSION_CHOICES, SiteGroup, Tank
 
 
 def _natural_name_key(value):
@@ -179,6 +179,7 @@ class CashUpEntryForm(forms.Form):
 		if section == "cash":
 			self._add_money_field("coins", "Coins", initial_values)
 			self._add_money_field("safedrops", "Safedrops", initial_values)
+			self._add_money_field("cash_float", "Float", initial_values)
 		elif section == "vouchers":
 			self._add_repeating_money_fields("vouchers", "Voucher", "voucher", "voucher_count", initial_values, "vouchers")
 		elif section == "airtime":
@@ -192,14 +193,16 @@ class CashUpEntryForm(forms.Form):
 			self._add_money_field("shop_total", "Total amount Shop", initial_values, total_group="fuel")
 		elif section == "payouts":
 			self._add_repeating_money_fields("payouts", "Payout", "payout", "payout_count", initial_values, "payout")
-		elif section == "eft-driveway":
-			for point in SpeedPoint.objects.filter(site=site):
-				key = f"eft_{point.pk}"
-				self._add_money_field(key, f"EFT {point.serial_number}", initial_values)
 		elif section == "manual-shop":
 			for point in ManualShopPoint.objects.filter(site=site):
 				key = f"manual_{point.pk}"
-				self._add_money_field(key, f"Manual {point.serial_number}", initial_values)
+				self._add_money_field(key, f"Card Machine {point.serial_number}", initial_values)
+				self._add_text_field(
+					f"manual_batch_{point.pk}",
+					f"Batch Number {point.serial_number}",
+					initial_values,
+					max_length=30,
+				)
 		elif section == "cash-up-additional":
 			for additional in CashUpAdditional.objects.filter(site=site):
 				key = f"additional_{additional.pk}"
@@ -209,7 +212,7 @@ class CashUpEntryForm(forms.Form):
 		widget_attrs = {"min": "0", "max": "100000000", "step": "0.01"}
 		if total_group:
 			widget_attrs["data-cash-up-total-input"] = total_group
-		elif self.section in {"cash", "eft-driveway", "manual-shop", "cash-up-additional"}:
+		elif self.section in {"cash", "manual-shop", "cash-up-additional"}:
 			widget_attrs["data-cash-up-total-input"] = self.section
 		self.fields[key] = forms.DecimalField(
 			label=label,
@@ -334,7 +337,7 @@ class CashUpEntryForm(forms.Form):
 			required=False,
 			max_length=max_length,
 			initial=initial_values.get(key, ""),
-			widget=forms.TextInput(attrs={"maxlength": max_length, "class": "airtime-shift-number-input"}),
+			widget=forms.TextInput(attrs={"maxlength": max_length, "class": "airtime-shift-number-input" if key.startswith("airtime_") else "card-machine-batch-input"}),
 		)
 		self.entry_fields.append((key, label))
 

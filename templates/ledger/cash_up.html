@@ -33,6 +33,7 @@
             <div class="cash-up-summary-row cash-up-summary-row--total"><span>Total Amount Accounted For</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_accounted_total|floatformat:2 }}</strong></div>
             <div class="cash-up-summary-row cash-up-summary-row--sales"><span>Total Sales</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_total_sales|floatformat:2 }}</strong></div>
             <div class="cash-up-summary-row cash-up-summary-row--difference"><span>Difference (Accounted For - Total Sales)</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_difference|floatformat:2 }}</strong></div>
+            {% if site.use_airtime %}<div class="cash-up-summary-row cash-up-summary-row--airtime"><span>Total Airtime Slip</span><strong>{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ summary_airtime_slip_total|floatformat:2 }}</strong></div>{% endif %}
         </div>
     </section>
     {% elif section == "airtime" %}
@@ -93,16 +94,23 @@
     {% else %}
     <section class="form-section">
         <div class="form-section-title"><span>{{ section_label }}</span></div>
-        {% if field_rows %}
+        {% if section == "manual-shop" and card_machine_rows %}
         <div class="cash-up-fields cash-up-fields--stacked">
-            {% for label, field in field_rows %}
-            <div class="form-row">{{ field.label_tag }}<div class="currency-input-line">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ field }}</div>{{ field.errors }}</div>
+            {% for row in card_machine_rows %}
+            <div class="card-machine-entry">
+                <div class="form-row">{{ row.amount.label_tag }}<div class="currency-input-line">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ row.amount }}</div>{{ row.amount.errors }}</div>
+                <div class="form-row">{{ row.batch.label_tag }}{{ row.batch }}{{ row.batch.errors }}</div>
+            </div>
             {% endfor %}
         </div>
-        {% elif section == "eft-driveway" %}
-        <p class="empty-state">No EFT machines are configured for this site.</p>
+        {% elif field_rows %}
+        <div class="cash-up-fields cash-up-fields--stacked">
+            {% for key, label, field in field_rows %}
+            <div class="form-row">{{ field.label_tag }}{% if key|slice:":13" == "manual_batch_" %}{{ field }}{% else %}<div class="currency-input-line">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ field }}</div>{% endif %}{{ field.errors }}</div>
+            {% endfor %}
+        </div>
         {% elif section == "manual-shop" %}
-        <p class="empty-state">No Manual machines are configured for this site.</p>
+        <p class="empty-state">No card machines are configured for this site.</p>
         {% elif section == "fuel" %}
         <p class="empty-state">No totals are configured for this site.</p>
         {% else %}
@@ -113,6 +121,10 @@
         <div class="calculated-row"><span>Total amount</span><div class="calculated-money">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}<strong data-cash-up-total="{{ total_group }}">{{ total_amount|floatformat:2 }}</strong></div></div>
         {% else %}
         <div class="calculated-row"><span>Total {{ section_label }}</span><div class="calculated-money">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}<strong data-cash-up-total="{{ total_group }}">{{ total_amount|floatformat:2 }}</strong></div></div>
+        {% endif %}
+        {% if section == "manual-shop" %}
+        <div class="calculated-row"><span>Total From POS</span><div class="calculated-money">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}<strong data-pos-card-total="{% if pos_total_credit_card != None %}{{ pos_total_credit_card }}{% endif %}">{% if pos_total_credit_card != None %}{{ pos_total_credit_card|floatformat:2 }}{% else %}Not imported{% endif %}</strong></div></div>
+        <div class="calculated-row"><span>Difference (Card Machines - POS)</span><div class="calculated-money">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}<strong data-card-pos-difference>{% if card_machine_difference != None %}{{ card_machine_difference|floatformat:2 }}{% else %}Not available{% endif %}</strong></div></div>
         {% endif %}
         {% endif %}
     </section>

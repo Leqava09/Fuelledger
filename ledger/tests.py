@@ -21,9 +21,10 @@ from django.utils import timezone
 from PIL import Image
 
 from ledger.calculations import FormulaError, calculate_values, validate_formula
-from ledger.admin import CashUpAdditionalInline, EFTDrivewayInline, ManualShopPointInline, NozzleInlineForm, SiteAdmin, SiteAdminForm, SpeedPointInlineForm, TankInlineForm
+from ledger.admin import CashUpAdditionalInline, CardMachineInlineForm, ManualShopPointInline, NozzleInlineForm, SiteAdmin, SiteAdminForm, TankInlineForm
 from ledger.models import (
     AirtimeSequenceAlert,
+    CardMachineBatchSequenceAlert,
     CashUpAdditional,
     CashUpField,
     CashUpShiftRecord,
@@ -130,6 +131,21 @@ class FirstHQUserSetupTests(TestCase):
 
 
 class SiteConfigurationAdminTests(TestCase):
+    def test_site_admin_exposes_airtime_toggle(self):
+        admin_user = User.objects.create_superuser(
+            username="airtime-option-admin",
+            password="admin-test-password",
+            email="airtime-option-admin@example.com",
+        )
+        client = Client()
+        client.force_login(admin_user)
+
+        response = client.get(reverse("admin:ledger_site_add"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Cash-up options")
+        self.assertContains(response, 'name="use_airtime"')
+
     def test_admin_login_page_is_available_to_anonymous_users(self):
         response = self.client.get(reverse("admin:login"))
 
@@ -162,22 +178,19 @@ class SiteConfigurationAdminTests(TestCase):
         self.assertContains(response, "Site Name")
         self.assertContains(response, "Amount of shifts")
         self.assertContains(response, "Readings used by site")
-        for field_name in ("use_tank_readings", "use_fuel_sales", "use_mechanical_readings", "use_electronic_readings"):
+        for field_name in ("use_tank_readings", "use_fuel_sales", "use_mechanical_readings", "use_electronic_readings", "use_airtime"):
             self.assertContains(response, f'name="{field_name}"')
         self.assertContains(response, "Tanks")
         self.assertContains(response, "Tank capacity (L)")
         self.assertContains(response, "Nozzles")
-        self.assertContains(response, "EFT/Driveway")
-        self.assertContains(response, "EFT/Driveway no/ID")
-        self.assertContains(response, "EFT/Driveway Serial No")
-        self.assertContains(response, "Manual/Shop")
-        self.assertContains(response, "Manual/Shop no/ID")
-        self.assertContains(response, "Manual/Shop Serial No")
+        self.assertNotContains(response, "EFT/Driveway")
+        self.assertContains(response, "Card Machines")
+        self.assertContains(response, "Card Machine no/ID")
+        self.assertContains(response, "Card Machine Serial No")
         self.assertContains(response, "Cash up additional")
         self.assertContains(response, "nested_admin")
         self.assertContains(response, "site_shift_selector.js")
         self.assertContains(response, "fuel-tanks-inline")
-        self.assertContains(response, "fuel-eft-driveway-inline")
         self.assertContains(response, "fuel-manual-shop-inline")
         self.assertContains(response, "fuel-cash-up-additional-inline")
         html = response.content.decode()
@@ -255,7 +268,7 @@ class SiteConfigurationAdminTests(TestCase):
         self.assertIn("currency", SiteAdmin.list_display)
         html = response.content.decode()
         self.assertLess(html.index("Cash up additional"), html.index('id="id_address"'))
-        self.assertLess(html.index("Manual/Shop"), html.index("Cash up additional"))
+        self.assertLess(html.index("Card Machines"), html.index("Cash up additional"))
         self.assertIn("Add another Cash up additional", html)
         site = Site.objects.create(name="Additional Fields Site")
         CashUpAdditional.objects.create(site=site, additional_field="Till variance")
@@ -275,15 +288,13 @@ class SiteConfigurationAdminTests(TestCase):
         self.assertEqual(site.speed_points.get(), point)
         self.assertEqual(str(point), "SP-1")
 
-    def test_speed_point_fields_are_side_by_side_and_limited(self):
-        form = SpeedPointInlineForm()
+    def test_card_machine_fields_are_side_by_side_and_limited(self):
+        form = CardMachineInlineForm()
 
         self.assertEqual(form.fields["point_id"].max_length, 10)
         self.assertEqual(form.fields["point_id"].widget.attrs["size"], 10)
         self.assertEqual(form.fields["serial_number"].max_length, 30)
         self.assertEqual(form.fields["serial_number"].widget.attrs["size"], 30)
-        self.assertEqual(EFTDrivewayInline.extra, 0)
-        self.assertEqual(EFTDrivewayInline.fields, ("point_id", "serial_number"))
         self.assertEqual(ManualShopPointInline.extra, 0)
         self.assertEqual(ManualShopPointInline.fields, ("point_id", "serial_number"))
 
@@ -1246,6 +1257,7 @@ class DailyFuelReadingWorkflowTests(TestCase):
                 "safedrops": Decimal("25130.00"),
                 "account_1": Decimal("2162.20"),
                 "payout_1": Decimal("2142.45"),
+                "credit_card_total": Decimal("18250.35"),
             },
             "fuel_sales": [
                 {"grade": "Diesel", "litres": Decimal("2166.44")},
@@ -1286,6 +1298,7 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertContains(preview, "Review report values")
         self.assertContains(preview, "full-day report")
         self.assertContains(preview, "Pump fuel sales do not match")
+        self.assertContains(preview, "18250.35")
         self.assertFalse(preview.context["overwrite_existing"])
         self.assertFalse(DailyFuelReading.objects.exists())
         token = preview.context["report_token"]
@@ -1331,6 +1344,7 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertEqual(cash_up.values["safedrops"], "25130.00")
         self.assertEqual(cash_up.values["sales_account_1"], "2162.20")
         self.assertEqual(cash_up.values["payout_1"], "2142.45")
+        self.assertEqual(cash_up.values["pos_total_credit_card"], "18250.35")
         self.site.refresh_from_db()
         self.assertEqual(self.site.report_nozzle_mapping, {"1": self.nozzle.pk, "2": self.nozzle_two.pk})
         self.assertEqual(self.site.report_product_mapping, {"diesel": "Diesel", "petrol": "Petrol"})
@@ -2201,7 +2215,7 @@ class CashUpWorkflowTests(TestCase):
         UserProfile.objects.create(user=hq_user, role=UserProfile.Role.HQ)
         self.client.force_login(hq_user)
         hq_dashboard = self.client.get(reverse("hq-dashboard"))
-        self.assertContains(hq_dashboard, "Airtime number alerts")
+        self.assertContains(hq_dashboard, "Airtime number alert")
         self.assertContains(hq_dashboard, "352")
         self.assertContains(hq_dashboard, "254")
         approved = self.client.post(approve_url)
@@ -2213,6 +2227,85 @@ class CashUpWorkflowTests(TestCase):
         cleared_dashboard = self.client.get(reverse("hq-dashboard"))
         self.assertContains(cleared_dashboard, "0 pending")
         self.assertNotContains(cleared_dashboard, "expected 353")
+
+    def test_card_machine_batch_mismatch_is_sent_to_hq_notification_center(self):
+        machine = ManualShopPoint.objects.create(
+            site=self.site,
+            point_id="CM-1",
+            serial_number="CARD-01",
+        )
+        CashUpShiftRecord.objects.create(
+            site=self.site,
+            business_date=self.business_date - timedelta(days=1),
+            shift_label="Night",
+            created_by=self.user,
+            values={f"manual_batch_{machine.pk}": "BATCH-009"},
+        )
+        response = self.client.post(
+            f"{self.cash_up_url('manual-shop')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                f"manual_{machine.pk}": "55.25",
+                f"manual_batch_{machine.pk}": "BATCH-012",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        alert = CardMachineBatchSequenceAlert.objects.get(site=self.site, card_machine=machine)
+        self.assertEqual(alert.previous_number, "BATCH-009")
+        self.assertEqual(alert.expected_number, "BATCH-010")
+        self.assertEqual(alert.entered_number, "BATCH-012")
+        self.assertFalse(alert.approved)
+
+        other_site = Site.objects.create(name="Other Notification Site", shift_count=2)
+        other_record = CashUpShiftRecord.objects.create(
+            site=other_site,
+            business_date=self.business_date,
+            shift_label="Night",
+            created_by=self.user,
+            values={},
+        )
+        AirtimeSequenceAlert.objects.create(
+            site=other_site,
+            cash_up_record=other_record,
+            card_index=1,
+            previous_number="100",
+            expected_number="101",
+            entered_number="110",
+            flagged_by=self.user,
+        )
+
+        hq_user = User.objects.create_user(username="batch-alert-hq", password="batch-alert-test-password")
+        UserProfile.objects.create(user=hq_user, role=UserProfile.Role.HQ)
+        self.client.force_login(hq_user)
+        dashboard = self.client.get(reverse("hq-dashboard"))
+        self.assertContains(dashboard, "Notification Center")
+        self.assertContains(dashboard, self.site.name)
+        self.assertContains(dashboard, other_site.name)
+        self.assertContains(dashboard, "Card machine batch number alert")
+        self.assertContains(dashboard, "BATCH-010")
+        self.assertContains(dashboard, "BATCH-012")
+        self.assertEqual(len(dashboard.context["notification_groups"]), 2)
+        self.assertTrue(all(len(group["notifications"]) == 1 for group in dashboard.context["notification_groups"]))
+
+        approved = self.client.post(reverse("approve-card-machine-alert", args=[alert.pk]))
+        self.assertRedirects(approved, reverse("hq-dashboard"), fetch_redirect_response=False)
+        alert.refresh_from_db()
+        self.assertTrue(alert.approved)
+
+        self.client.force_login(self.user)
+        corrected = self.client.post(
+            f"{self.cash_up_url('manual-shop')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                f"manual_{machine.pk}": "55.25",
+                f"manual_batch_{machine.pk}": "BATCH-010",
+            },
+        )
+        self.assertEqual(corrected.status_code, 302)
+        self.assertFalse(CardMachineBatchSequenceAlert.objects.filter(cash_up_record=alert.cash_up_record).exists())
 
     def test_deleted_airtime_card_and_its_hq_alert_are_removed(self):
         previous_date = self.business_date - timedelta(days=1)
@@ -2288,8 +2381,7 @@ class CashUpWorkflowTests(TestCase):
             ("sales-account", "Account"),
             ("fuel", "Fuel"),
             ("payouts", "Payouts"),
-            ("eft-driveway", "EFT"),
-            ("manual-shop", "Manual"),
+            ("manual-shop", "Card Machines"),
             ("cash-up-additional", "Additional"),
             ("summary", "Summary"),
         ):
@@ -2312,6 +2404,34 @@ class CashUpWorkflowTests(TestCase):
         self.assertContains(cash_page, "cash-up-page-heading")
         self.assertContains(cash_page, "cash-up-form")
 
+    def test_airtime_can_be_disabled_for_a_site(self):
+        self.site.use_airtime = False
+        self.site.save(update_fields=["use_airtime"])
+        CashUpShiftRecord.objects.create(
+            site=self.site,
+            business_date=self.business_date,
+            shift_label="Night",
+            created_by=self.user,
+            values={"coins": "10.00", "forecourt_total": "10.00", "airtime_slip_1": "5.00"},
+        )
+
+        dashboard = self.client.get(reverse("site-dashboard", args=[self.site.slug]), self.cash_up_query())
+        cash_page = self.client.get(self.cash_up_url("cash"), self.cash_up_query())
+        summary_page = self.client.get(self.cash_up_url("summary"), self.cash_up_query())
+        report_page = self.client.get(reverse("cash-up-reports", args=[self.site.slug]), {
+            "period": "day",
+            "from_date": self.business_date.isoformat(),
+        })
+
+        self.assertNotContains(dashboard, self.cash_up_url("airtime"))
+        self.assertNotContains(cash_page, self.cash_up_url("airtime"))
+        self.assertEqual(self.client.get(self.cash_up_url("airtime"), self.cash_up_query()).status_code, 404)
+        self.assertNotContains(summary_page, "Total Airtime Slip")
+        self.assertEqual(summary_page.context["summary_accounted_total"], Decimal("10.00"))
+        self.assertNotContains(report_page, "Total Airtime Slip")
+        self.assertNotContains(report_page, "<th>Airtime Slip</th>")
+        self.assertEqual(report_page.context["summary_accounted_total"], Decimal("10.00"))
+
     def test_cash_up_summary_reconciles_saved_shift_totals_in_site_currency(self):
         additional = CashUpAdditional.objects.create(site=self.site, additional_field="Till variance")
         CashUpShiftRecord.objects.create(
@@ -2331,6 +2451,7 @@ class CashUpWorkflowTests(TestCase):
                 "payout_1": "2.00",
                 "eft_1": "15.00",
                 "manual_1": "7.00",
+                "eft_1": "100.00",
                 f"additional_{additional.pk}": "8.00",
                 "airtime_slip_1": "3.00",
                 "airtime_slip_2": "4.00",
@@ -2343,19 +2464,23 @@ class CashUpWorkflowTests(TestCase):
         self.assertContains(response, "Total Cash")
         self.assertContains(response, "Total Vouchers")
         self.assertContains(response, "Combined Sales and Arrears")
-        self.assertContains(response, "Total EFT")
-        self.assertContains(response, "Total Manual")
+        self.assertNotContains(response, "Total EFT")
+        self.assertContains(response, "Total Card Machines")
         self.assertContains(response, "Total Additional")
         self.assertContains(response, "Total Airtime Slip")
+        self.assertContains(response, "cash-up-summary-row--airtime")
         self.assertContains(response, "Total Payouts")
         self.assertContains(response, "cash-up-summary-row--payouts")
         self.assertContains(response, "Total Amount Accounted For")
         self.assertContains(response, "Total Sales")
         self.assertContains(response, "Difference (Accounted For - Total Sales)")
-        self.assertContains(response, "129.00")
+        self.assertContains(response, "107.00")
         self.assertContains(response, "130.00")
-        self.assertContains(response, "-1.00")
-        self.assertEqual(response.content.decode().count('class="currency-prefix">ZAR</span>'), 11)
+        self.assertContains(response, "-23.00")
+        self.assertContains(response, "7.00")
+        summary_html = response.content.decode()
+        self.assertLess(summary_html.index("Difference (Accounted For - Total Sales)"), summary_html.index("Total Airtime Slip"))
+        self.assertEqual(response.content.decode().count('class="currency-prefix">ZAR</span>'), 10)
         self.assertNotContains(response, "Save and Continue")
 
     def test_additional_tab_and_summary_amount_follow_site_registration(self):
@@ -2422,9 +2547,12 @@ class CashUpWorkflowTests(TestCase):
         self.assertNotContains(week_report, "Reference date")
         self.assertEqual(week_report.context["report_start"], anchor_date - timedelta(days=7))
         self.assertEqual(week_report.context["report_end"], anchor_date)
-        self.assertEqual(week_report.context["summary_accounted_total"], Decimal("72.00"))
+        self.assertEqual(week_report.context["summary_accounted_total"], Decimal("67.00"))
         self.assertEqual(week_report.context["summary_total_sales"], Decimal("600.00"))
-        self.assertEqual(week_report.context["summary_difference"], Decimal("-528.00"))
+        self.assertEqual(week_report.context["summary_difference"], Decimal("-533.00"))
+        self.assertEqual(week_report.context["summary_airtime_slip_total"], Decimal("5.00"))
+        self.assertContains(week_report, "cash-up-summary-row--airtime")
+        self.assertLess(week_report.content.decode().index("Difference (Accounted For - Total Sales)"), week_report.content.decode().index("Total Airtime Slip"))
         self.assertContains(week_report, "cash-up-report-detail-section--new-page")
         self.assertContains(week_report, 'data-print-report')
         self.assertContains(week_report, 'class="cash-up-summary-row cash-up-summary-row--difference cash-up-difference--nonzero"')
@@ -2436,7 +2564,7 @@ class CashUpWorkflowTests(TestCase):
         self.assertNotContains(single_day_report, "cash-up-report-detail-section--new-page")
 
         day_report = self.client.get(report_url, {"period": "week", "from_date": anchor_date.isoformat(), "shift": "Day"})
-        self.assertEqual(day_report.context["summary_accounted_total"], Decimal("17.00"))
+        self.assertEqual(day_report.context["summary_accounted_total"], Decimal("12.00"))
         self.assertEqual(day_report.context["summary_total_sales"], Decimal("100.00"))
         self.assertEqual(len(day_report.context["report_rows"]), 1)
 
@@ -2445,7 +2573,7 @@ class CashUpWorkflowTests(TestCase):
             "from_date": week_start.isoformat(),
             "to_date": week_start.isoformat(),
         })
-        self.assertEqual(manual_report.context["summary_accounted_total"], Decimal("42.00"))
+        self.assertEqual(manual_report.context["summary_accounted_total"], Decimal("37.00"))
         self.assertEqual(manual_report.context["summary_total_sales"], Decimal("300.00"))
         self.assertEqual(len(manual_report.context["report_rows"]), 2)
 
@@ -2618,6 +2746,22 @@ class CashUpWorkflowTests(TestCase):
         self.assertNotContains(response, "Total Airtime")
         self.assertNotContains(response, "Total Airtime Loaded")
 
+    def test_airtime_difference_is_system_minus_slip(self):
+        response = self.client.post(
+            f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
+            {
+                "business_date": self.business_date.isoformat(),
+                "shift_label": "Night",
+                "airtime_slip": "12.00",
+                "airtime_system": "17.00",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        page = self.client.get(self.cash_up_url("airtime"), self.cash_up_query())
+        self.assertContains(page, "5.00")
+        self.assertEqual(page.context["airtime_rows"][0]["difference"], Decimal("5.00"))
+
     def test_airtime_first_balance_is_manual_and_later_balances_chain(self):
         CashUpShiftRecord.objects.create(
             site=self.site,
@@ -2767,8 +2911,8 @@ class CashUpWorkflowTests(TestCase):
         remove_buttons = re.findall(r'<button class="remove-repeat-row"[^>]*>', response.content.decode())
         self.assertEqual(len(remove_buttons), 2)
         self.assertTrue(all("disabled" not in button for button in remove_buttons))
-        self.assertContains(response, "2.00")
-        self.assertContains(response, "-1.00")
+        self.assertContains(response, "-2.00")
+        self.assertContains(response, "1.00")
 
         response = self.client.post(
             f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
@@ -2800,6 +2944,7 @@ class CashUpWorkflowTests(TestCase):
                 "save_mode": "continue",
                 "coins": "9.00",
                 "safedrops": "4.00",
+                "cash_float": "2.50",
             },
         )
         self.assertRedirects(
@@ -2809,11 +2954,11 @@ class CashUpWorkflowTests(TestCase):
         )
         record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
         self.assertEqual(record.values["coins"], "9.00")
-        self.assertEqual(record.values["totals"]["cash"], "13.00")
+        self.assertEqual(record.values["totals"]["cash"], "15.50")
 
     def test_save_and_exit_saves_drafts_from_all_tabs(self):
         all_tab_values = {
-            "cash": {"coins": "15.00", "safedrops": "6.00"},
+            "cash": {"coins": "15.00", "safedrops": "6.00", "cash_float": "2.50"},
             "vouchers": {"voucher_count": "2", "voucher_1": "3.00", "voucher_2": "2.00"},
             "airtime": {"airtime_shift_nr": "SHIFT12345", "airtime_loaded": "11.00"},
         }
@@ -2835,37 +2980,33 @@ class CashUpWorkflowTests(TestCase):
         record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
         self.assertEqual(record.values["coins"], "15.00")
         self.assertEqual(record.values["safedrops"], "6.00")
+        self.assertEqual(record.values["cash_float"], "2.50")
         self.assertEqual(record.values["voucher_2"], "2.00")
         self.assertEqual(record.values["airtime_loaded"], "11.00")
-        self.assertEqual(record.values["totals"]["cash"], "21.00")
+        self.assertEqual(record.values["totals"]["cash"], "23.50")
         self.assertEqual(record.values["totals"]["vouchers"], "5.00")
 
     def test_configured_machine_and_additional_fields_are_dynamic_and_preserved(self):
-        eft_point = SpeedPoint.objects.create(site=self.site, point_id="EFT-3", serial_number="DRIVE-3")
         manual_point = ManualShopPoint.objects.create(site=self.site, point_id="SHOP-2", serial_number="MANUAL-2")
         additional = CashUpAdditional.objects.create(site=self.site, additional_field="Till variance")
-        for section, label in (("eft-driveway", "EFT/Driveway DRIVE-3"), ("manual-shop", "Manual/Shop MANUAL-2"), ("cash-up-additional", "Till variance")):
+        for section, label in (("manual-shop", "Card Machine MANUAL-2"), ("cash-up-additional", "Till variance")):
             page = self.client.get(self.cash_up_url(section), self.cash_up_query())
             self.assertContains(page, label)
             self.assertContains(page, 'class="cash-up-fields cash-up-fields--stacked"')
             self.assertContains(page, 'data-cash-up-total="')
-        eft_page = self.client.get(self.cash_up_url("eft-driveway"), self.cash_up_query())
-        self.assertNotContains(eft_page, "EFT-3")
-        self.assertContains(eft_page, 'class="currency-prefix">ZAR</span>')
-        self.assertEqual(self.client.post(
-            f"{self.cash_up_url('eft-driveway')}?date={self.business_date.isoformat()}&shift=Night",
-            {
-                "business_date": self.business_date.isoformat(),
-                "shift_label": "Night",
-                f"eft_{eft_point.pk}": "100.00",
-            },
-        ).status_code, 302)
+        self.assertEqual(self.client.get(self.cash_up_url("eft-driveway"), self.cash_up_query()).status_code, 404)
+        manual_page = self.client.get(self.cash_up_url("manual-shop"), self.cash_up_query())
+        self.assertContains(manual_page, f'name="manual_batch_{manual_point.pk}"')
+        self.assertContains(manual_page, 'class="card-machine-entry"')
+        self.assertContains(manual_page, "Total From POS")
+        self.assertEqual(manual_page.content.decode().count('class="currency-prefix">ZAR</span>'), 4)
         self.assertEqual(self.client.post(
             f"{self.cash_up_url('manual-shop')}?date={self.business_date.isoformat()}&shift=Night",
             {
                 "business_date": self.business_date.isoformat(),
                 "shift_label": "Night",
                 f"manual_{manual_point.pk}": "55.25",
+                f"manual_batch_{manual_point.pk}": "B-100",
             },
         ).status_code, 302)
         self.assertEqual(self.client.post(
@@ -2877,9 +3018,14 @@ class CashUpWorkflowTests(TestCase):
             },
         ).status_code, 302)
         record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
-        self.assertEqual(record.values[f"eft_{eft_point.pk}"], "100.00")
         self.assertEqual(record.values[f"manual_{manual_point.pk}"], "55.25")
+        self.assertEqual(record.values[f"manual_batch_{manual_point.pk}"], "B-100")
         self.assertEqual(record.values[f"additional_{additional.pk}"], "3.75")
+        record.values["pos_total_credit_card"] = "50.00"
+        record.save(update_fields=["values"])
+        manual_page = self.client.get(self.cash_up_url("manual-shop"), self.cash_up_query())
+        self.assertContains(manual_page, 'data-pos-card-total="50.00">50.00')
+        self.assertContains(manual_page, ">5.25</strong>")
 
     def test_sales_account_total_and_airtime_difference_start_from_saved_values(self):
         self.client.post(

@@ -33,12 +33,14 @@ from .forms import (
 )
 from .models import (
 	AirtimeSequenceAlert,
+	CardMachineBatchSequenceAlert,
 	CashUpAdditional,
 	CashUpShiftRecord,
 	DailyFuelReading,
 	FuelBooking,
 	FuelTransfer,
 	FuelReadingSequenceAlert,
+	ManualShopPoint,
 	NozzleFuelReading,
 	Nozzle,
 	ShiftEntry,
@@ -70,8 +72,7 @@ CASH_UP_TAB_LABELS = (
 	("vouchers", "Vouchers"),
 	("sales-account", "Account"),
 	("payouts", "Payouts"),
-	("eft-driveway", "EFT"),
-	("manual-shop", "Manual"),
+	("manual-shop", "Card Machines"),
 	("cash-up-additional", "Additional"),
 	("airtime", "Airtime"),
 	("summary", "Summary"),
@@ -247,13 +248,38 @@ def hq_dashboard(request):
 	pending_airtime_alerts = AirtimeSequenceAlert.objects.filter(approved=False).select_related(
 		"site", "cash_up_record", "flagged_by",
 	).order_by("-created_at")
+	pending_card_machine_alerts = CardMachineBatchSequenceAlert.objects.filter(approved=False).select_related(
+		"site", "cash_up_record", "card_machine", "flagged_by",
+	).order_by("-created_at")
 	pending_fuel_reading_alerts = FuelReadingSequenceAlert.objects.filter(approved=False).select_related(
 		"site", "daily_reading", "nozzle", "flagged_by",
 	).order_by("-created_at")
+	notification_groups = {}
+	for kind, alerts in (
+		("airtime", pending_airtime_alerts),
+		("card_machine", pending_card_machine_alerts),
+		("fuel_reading", pending_fuel_reading_alerts),
+	):
+		for alert in alerts:
+			group = notification_groups.setdefault(alert.site_id, {"site": alert.site, "notifications": []})
+			group["notifications"].append({"kind": kind, "alert": alert})
+	notification_groups = sorted(
+		notification_groups.values(),
+		key=lambda group: group["site"].name.casefold(),
+	)
+	for group in notification_groups:
+		group["notifications"].sort(key=lambda item: item["alert"].created_at, reverse=True)
 	return render(request, "ledger/hq_dashboard.html", {
 		"sites": sites,
 		"pending_airtime_alerts": pending_airtime_alerts,
+		"pending_card_machine_alerts": pending_card_machine_alerts,
 		"pending_fuel_reading_alerts": pending_fuel_reading_alerts,
+		"notification_groups": notification_groups,
+		"notification_count": (
+			len(pending_airtime_alerts)
+			+ len(pending_card_machine_alerts)
+			+ len(pending_fuel_reading_alerts)
+		),
 	})
 
 
@@ -288,6 +314,21 @@ def approve_fuel_reading_sequence_alert(request, alert_id):
 
 
 @login_required
+@require_POST
+def approve_card_machine_batch_alert(request, alert_id):
+	profile = _profile(request.user)
+	if not request.user.is_superuser and (not profile or profile.role != UserProfile.Role.HQ):
+		return HttpResponseForbidden("Only HQ users can approve card machine batch alerts.")
+	alert = get_object_or_404(CardMachineBatchSequenceAlert, pk=alert_id, approved=False)
+	alert.approved = True
+	alert.approved_by = request.user
+	alert.approved_at = timezone.now()
+	alert.save(update_fields=["approved", "approved_by", "approved_at"])
+	messages.success(request, "Card machine batch sequence flag approved and cleared.")
+	return redirect("hq-dashboard")
+
+
+@login_required
 def site_dashboard(request, slug):
 	site = request.current_site
 	selected_date, today = _selected_business_date(request)
@@ -298,7 +339,6 @@ def site_dashboard(request, slug):
 	return render(request, "ledger/site_dashboard.html", {
 		"site": site,
 		"tank_count": site.tanks.count(),
-		"speed_point_count": site.speed_points.count(),
 		"manual_shop_count": site.manual_shop_points.count(),
 		"selected_date": selected_date,
 		"today": today,
@@ -574,13 +614,17 @@ def cash_up_reports(request, slug):
 	base_summary = _cash_up_summary({}, additional_field_ids)
 	aggregate_amounts = {row["key"]: Decimal("0") for row in base_summary["rows"]}
 	aggregate_sales = Decimal("0")
+	aggregate_airtime_slip = Decimal("0")
 	report_rows = []
 	for record in candidates:
 		summary = _cash_up_summary(record.values or {}, additional_field_ids)
 		amounts = {row["key"]: row["amount"] for row in summary["rows"]}
+		amounts["airtime_slip"] = summary["airtime_slip_total"]
 		for key, amount in amounts.items():
-			aggregate_amounts[key] += amount
+			if key != "airtime_slip":
+				aggregate_amounts[key] += amount
 		aggregate_sales += summary["total_sales"]
+		aggregate_airtime_slip += summary["airtime_slip_total"]
 		report_rows.append({
 			"business_date": record.business_date,
 			"shift": record.shift_label,
@@ -612,6 +656,7 @@ def cash_up_reports(request, slug):
 		"summary_accounted_total": aggregate_accounted,
 		"summary_total_sales": aggregate_sales,
 		"summary_difference": aggregate_accounted - aggregate_sales,
+		"summary_airtime_slip_total": aggregate_airtime_slip,
 		"report_rows": report_rows,
 	})
 
@@ -993,6 +1038,8 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 		save_mode = request.POST.get("save_mode", "tab")
 		airtime_sequence_issues = []
 		airtime_sequence_checked = False
+		card_machine_sequence_issues = []
+		card_machine_sequence_checked = False
 		sequence_confirmed = request.POST.get("airtime_sequence_confirmed") == "1"
 		if save_mode == "exit":
 			try:
@@ -1036,10 +1083,19 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 					airtime_sequence_issues = _airtime_sequence_issues(updated_values, previous_airtime_shift_number)
 					if airtime_sequence_issues and not sequence_confirmed:
 						validation_errors.append("Airtime shift numbers need confirmation")
+				elif tab_key == "manual-shop":
+					card_machine_sequence_checked = True
+					card_machine_sequence_issues = _card_machine_batch_issues(
+						site, updated_values, selected_date, shift_label,
+					)
 			if validation_errors:
 				form.add_error(None, "Check the invalid entries in these sections before saving all: " + ", ".join(validation_errors))
 			else:
-				return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, "exit", section, airtime_sequence_issues, airtime_sequence_checked)
+				return _complete_cash_up_save(
+					request, site, record, initial_values, updated_values, selected_date, shift_label, "exit", section,
+					airtime_sequence_issues, airtime_sequence_checked,
+					card_machine_sequence_issues, card_machine_sequence_checked,
+				)
 		elif form.is_valid():
 			updated_values = _apply_cash_up_form_values(initial_values, form, previous_airtime_balance=previous_airtime_balance)
 			if section == "airtime":
@@ -1049,6 +1105,16 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 					form.add_error(None, "Confirm the Airtime Shift Number sequence before saving.")
 				else:
 					return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, save_mode, section, airtime_sequence_issues, airtime_sequence_checked)
+			elif section == "manual-shop":
+				card_machine_sequence_checked = True
+				card_machine_sequence_issues = _card_machine_batch_issues(
+					site, updated_values, selected_date, shift_label,
+				)
+				return _complete_cash_up_save(
+					request, site, record, initial_values, updated_values, selected_date, shift_label, save_mode, section,
+					card_machine_sequence_issues=card_machine_sequence_issues,
+					card_machine_sequence_checked=card_machine_sequence_checked,
+				)
 			else:
 				return _complete_cash_up_save(request, site, record, initial_values, updated_values, selected_date, shift_label, save_mode, section)
 	else:
@@ -1057,11 +1123,10 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 	summary = _cash_up_summary(initial_values, [field.pk for field in additional_fields])
 	totals = summary["totals"]
 	total_group_prefixes = {
-		"eft-driveway": "eft_",
 		"manual-shop": "manual_",
 		"cash-up-additional": "additional_",
 	}
-	airtime_difference = Decimal(str(initial_values.get("airtime_slip") or 0)) - Decimal(str(initial_values.get("airtime_system") or 0))
+	airtime_difference = Decimal(str(initial_values.get("airtime_system") or 0)) - Decimal(str(initial_values.get("airtime_slip") or 0))
 	group_totals = {
 		"cash": totals["cash"],
 		"vouchers": totals["vouchers"],
@@ -1069,10 +1134,20 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 		"arrears_account": totals["arrears_account"],
 		"fuel": totals["fuel"],
 		"payouts": totals["payouts"],
-		"eft-driveway": totals["eft_driveway"],
 		"manual-shop": totals["manual_shop"],
 		"cash-up-additional": summary["additional_total"],
 	}
+	try:
+		pos_total_credit_card = Decimal(str(initial_values["pos_total_credit_card"]))
+	except (KeyError, TypeError, ValueError, ArithmeticError):
+		pos_total_credit_card = None
+	card_machine_rows = [
+		{
+			"amount": form[f"manual_{point.pk}"],
+			"batch": form[f"manual_batch_{point.pk}"],
+		}
+		for point in ManualShopPoint.objects.filter(site=site)
+	] if section == "manual-shop" else []
 	repeat_groups = [
 		{
 			**group,
@@ -1098,7 +1173,7 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 					row_fields.append((label, form[field_name]))
 			if row_fields:
 				try:
-					difference = Decimal(str(form[f"airtime_slip_{index}"].value() or 0)) - Decimal(str(form[f"airtime_system_{index}"].value() or 0))
+					difference = Decimal(str(form[f"airtime_system_{index}"].value() or 0)) - Decimal(str(form[f"airtime_slip_{index}"].value() or 0))
 				except (ArithmeticError, TypeError, ValueError):
 					difference = Decimal("0")
 				shift_key = "airtime_shift_nr" if index == 1 else f"airtime_shift_nr_{index}"
@@ -1121,6 +1196,7 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 		"summary_accounted_total": summary["accounted_total"],
 		"summary_total_sales": summary["total_sales"],
 		"summary_difference": summary["difference"],
+		"summary_airtime_slip_total": summary["airtime_slip_total"],
 		"repeat_groups": repeat_groups,
 		"airtime_rows": airtime_rows,
 		"airtime_difference": airtime_difference,
@@ -1128,7 +1204,13 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 		"previous_airtime_shift_number": previous_airtime_shift_number,
 		"show_total": section in {"cash", "vouchers", "sales-account", "fuel", "payouts", *total_group_prefixes},
 		"total_group": section,
-		"field_rows": [(label, form[key]) for key, label in form.entry_fields],
+		"field_rows": [(key, label, form[key]) for key, label in form.entry_fields],
+		"card_machine_rows": card_machine_rows,
+		"pos_total_credit_card": pos_total_credit_card,
+		"card_machine_difference": (
+			Decimal(str(group_totals["manual-shop"])) - pos_total_credit_card
+			if pos_total_credit_card is not None else None
+		),
 		"draft_key": f"{request.user.pk}:{site.pk}:{selected_date.isoformat()}:{shift_label}",
 	})
 
@@ -1215,8 +1297,23 @@ def _apply_cash_up_form_values(values, form, previous_airtime_balance=None):
 	return updated_values
 
 
-def _complete_cash_up_save(request, site, record, before, updated_values, selected_date, shift_label, save_mode, section, airtime_sequence_issues=None, airtime_sequence_checked=False):
+def _complete_cash_up_save(
+	request,
+	site,
+	record,
+	before,
+	updated_values,
+	selected_date,
+	shift_label,
+	save_mode,
+	section,
+	airtime_sequence_issues=None,
+	airtime_sequence_checked=False,
+	card_machine_sequence_issues=None,
+	card_machine_sequence_checked=False,
+):
 	airtime_sequence_issues = airtime_sequence_issues or []
+	card_machine_sequence_issues = card_machine_sequence_issues or []
 	with transaction.atomic():
 		if record is None:
 			record = CashUpShiftRecord(
@@ -1269,6 +1366,49 @@ def _complete_cash_up_save(request, site, record, before, updated_values, select
 				alert.approved_by = None
 				alert.approved_at = None
 				alert.save(update_fields=["site", "previous_number", "expected_number", "entered_number", "flagged_by", "approved", "approved_by", "approved_at"])
+		if card_machine_sequence_checked:
+			issue_by_machine = {issue["machine_id"]: issue for issue in card_machine_sequence_issues}
+			for alert in CardMachineBatchSequenceAlert.objects.filter(cash_up_record=record):
+				issue = issue_by_machine.pop(alert.card_machine_id, None)
+				if issue is None:
+					alert.delete()
+					continue
+				alert.previous_number = issue["previous_number"]
+				alert.expected_number = issue["expected_number"]
+				alert.entered_number = issue["entered_number"]
+				alert.flagged_by = request.user
+				alert.approved = False
+				alert.approved_by = None
+				alert.approved_at = None
+				alert.save(update_fields=[
+					"previous_number", "expected_number", "entered_number", "flagged_by",
+					"approved", "approved_by", "approved_at",
+				])
+			for issue in issue_by_machine.values():
+				alert, created = CardMachineBatchSequenceAlert.objects.get_or_create(
+					cash_up_record=record,
+					card_machine_id=issue["machine_id"],
+					defaults={
+						"site": site,
+						"previous_number": issue["previous_number"],
+						"expected_number": issue["expected_number"],
+						"entered_number": issue["entered_number"],
+						"flagged_by": request.user,
+					},
+				)
+				if not created:
+					alert.site = site
+					alert.previous_number = issue["previous_number"]
+					alert.expected_number = issue["expected_number"]
+					alert.entered_number = issue["entered_number"]
+					alert.flagged_by = request.user
+					alert.approved = False
+					alert.approved_by = None
+					alert.approved_at = None
+					alert.save(update_fields=[
+						"site", "previous_number", "expected_number", "entered_number", "flagged_by",
+						"approved", "approved_by", "approved_at",
+					])
 	_record_audit(
 		site,
 		request.user,
@@ -1332,11 +1472,12 @@ def _previous_airtime_balance(site, selected_date, shift_label):
 		business_date__gte=selected_date - timedelta(days=365),
 		business_date__lte=selected_date,
 	).only("business_date", "shift_label", "values", "updated_at")
-	for candidate in sorted(
+	ordered_candidates = sorted(
 		candidates,
 		key=lambda item: (item.business_date, shift_order.get(item.shift_label, -1)),
 		reverse=True,
-	):
+	)
+	for candidate in ordered_candidates:
 		if candidate.business_date == selected_date and shift_order.get(candidate.shift_label, -1) >= current_shift_order:
 			continue
 		value = _latest_airtime_balance(candidate.values)
@@ -1392,19 +1533,63 @@ def _airtime_sequence_issues(values, previous_number):
 	for card_index, entered in enumerate(_airtime_shift_numbers(values), start=1):
 		if not entered:
 			continue
-		previous_match = re.fullmatch(r"(.*?)(\d+)", previous)
-		entered_match = re.fullmatch(r"(.*?)(\d+)", entered)
-		if previous_match:
-			expected_suffix = str(int(previous_match.group(2)) + 1).zfill(len(previous_match.group(2)))
-			expected = f"{previous_match.group(1)}{expected_suffix}"
-			if not entered_match or entered != expected:
-				issues.append({
-					"card_index": card_index,
-					"previous_number": previous,
-					"expected_number": expected,
-					"entered_number": entered,
-				})
+		expected = _next_sequence_number(previous)
+		if expected and entered != expected:
+			issues.append({
+				"card_index": card_index,
+				"previous_number": previous,
+				"expected_number": expected,
+				"entered_number": entered,
+			})
 		previous = entered
+	return issues
+
+
+def _next_sequence_number(previous):
+	match = re.fullmatch(r"(.*?)(\d+)", str(previous or "").strip())
+	if not match:
+		return ""
+	next_suffix = str(int(match.group(2)) + 1).zfill(len(match.group(2)))
+	return f"{match.group(1)}{next_suffix}"
+
+
+def _card_machine_batch_issues(site, values, selected_date, shift_label):
+	shift_names = site.get_shift_names()
+	if shift_label not in shift_names:
+		return []
+	shift_order = {name: index for index, name in enumerate(shift_names)}
+	current_order = shift_order[shift_label]
+	candidates = CashUpShiftRecord.objects.filter(
+		site=site,
+		business_date__lte=selected_date,
+	).only("business_date", "shift_label", "values")
+	ordered_candidates = sorted(
+		candidates,
+		key=lambda item: (item.business_date, shift_order.get(item.shift_label, -1)),
+		reverse=True,
+	)
+	issues = []
+	for machine in ManualShopPoint.objects.filter(site=site):
+		key = f"manual_batch_{machine.pk}"
+		entered = str(values.get(key) or "").strip()
+		if not entered:
+			continue
+		previous = ""
+		for candidate in ordered_candidates:
+			if candidate.business_date == selected_date and shift_order.get(candidate.shift_label, -1) >= current_order:
+				continue
+			candidate_number = str((candidate.values or {}).get(key) or "").strip()
+			if candidate_number:
+				previous = candidate_number
+				break
+		expected = _next_sequence_number(previous)
+		if expected and entered != expected:
+			issues.append({
+				"machine_id": machine.pk,
+				"previous_number": previous,
+				"expected_number": expected,
+				"entered_number": entered,
+			})
 	return issues
 
 
@@ -1421,7 +1606,11 @@ def _cash_up_totals(values):
 				group_values.append(Decimal(str(legacy_value)))
 		return sum(group_values, Decimal("0"))
 
-	cash = Decimal(str(values.get("coins") or 0)) + Decimal(str(values.get("safedrops") or 0))
+	cash = (
+		Decimal(str(values.get("coins") or 0))
+		+ Decimal(str(values.get("safedrops") or 0))
+		+ Decimal(str(values.get("cash_float") or 0))
+	)
 	sales_account = sum_group("sales_account_", "sales_account")
 	arrears_account = sum_group("arrears_account_", "arrears_account")
 	legacy_fuel_total = _fuel_total(values, sum_group)
@@ -1440,8 +1629,11 @@ def _cash_up_totals(values):
 		"payouts": str(sum_group("payout_", "payout")),
 		"airtime_slip": str(sum_group("airtime_slip_", "airtime_slip")),
 		"airtime_loaded": str(Decimal(str(values.get("airtime_loaded") or 0))),
-		"eft_driveway": str(sum(Decimal(str(value or 0)) for key, value in values.items() if key.startswith("eft_"))),
-		"manual_shop": str(sum(Decimal(str(value or 0)) for key, value in values.items() if key.startswith("manual_"))),
+		"manual_shop": str(sum(
+			Decimal(str(value or 0))
+			for key, value in values.items()
+			if key.startswith("manual_") and key[len("manual_"):].isdigit()
+		)),
 		"cash_up_additional": str(sum(Decimal(str(value or 0)) for key, value in values.items() if key.startswith("additional_"))),
 	}
 
@@ -1456,13 +1648,11 @@ def _cash_up_summary(values, additional_field_ids=()):
 		{"key": "cash", "label": "Total Cash", "amount": Decimal(totals["cash"])},
 		{"key": "vouchers", "label": "Total Vouchers", "amount": Decimal(totals["vouchers"])},
 		{"key": "accounts", "label": "Combined Sales and Arrears", "amount": Decimal(totals["sales_accounts_combined"])},
-		{"key": "eft", "label": "Total EFT", "amount": Decimal(totals["eft_driveway"])},
-		{"key": "manual", "label": "Total Manual", "amount": Decimal(totals["manual_shop"])},
+		{"key": "manual", "label": "Total Card Machines", "amount": Decimal(totals["manual_shop"])},
 	]
 	if additional_field_ids:
 		rows.append({"key": "additional", "label": "Total Additional", "amount": additional_total})
 	rows.extend([
-		{"key": "airtime_slip", "label": "Total Airtime Slip", "amount": Decimal(totals["airtime_slip"])},
 		{"key": "payouts", "label": "Total Payouts", "amount": Decimal(totals["payouts"]), "class": "cash-up-summary-row--payouts"},
 	])
 	accounted_total = sum((row["amount"] for row in rows), Decimal("0"))
@@ -1472,6 +1662,7 @@ def _cash_up_summary(values, additional_field_ids=()):
 		"accounted_total": accounted_total,
 		"total_sales": total_sales,
 		"difference": accounted_total - total_sales,
+		"airtime_slip_total": Decimal(totals["airtime_slip"]),
 		"additional_total": additional_total,
 		"totals": totals,
 	}
@@ -1500,6 +1691,7 @@ def _cash_up_tab_labels(site):
 		(key, label)
 		for key, label in CASH_UP_TAB_LABELS
 		if key != "cash-up-additional" or has_additional_fields
+		if key != "airtime" or site.use_airtime
 	)
 
 
@@ -1652,7 +1844,7 @@ def _report_review_context(site, report, shift_label, selected_nozzles=None, sel
 	overwrite_cash_up = bool(cash_up_record and any(
 		value not in (None, "")
 		for key, value in cash_up_record.values.items()
-		if key in {"forecourt_total", "safedrops"}
+		if key in {"forecourt_total", "safedrops", "pos_total_credit_card"}
 		or re.fullmatch(r"sales_account_\d+|payout_\d+", key)
 	))
 	return {
@@ -1792,6 +1984,11 @@ def fuel_report_import(request, slug):
 				if value < 0 or value > Decimal("100000000"):
 					raise ValueError
 				selected_cash_up[key] = value
+			if payload["cash_up"].get("credit_card_total") is not None:
+				credit_card_total = Decimal(payload["cash_up"]["credit_card_total"]).quantize(Decimal("0.01"))
+				if credit_card_total < 0 or credit_card_total > Decimal("100000000"):
+					raise ValueError
+				selected_cash_up["credit_card_total"] = credit_card_total
 		except (KeyError, TypeError, ValueError, ArithmeticError):
 			context.update(_report_review_context(
 				site,
@@ -1865,6 +2062,7 @@ def fuel_report_import(request, slug):
 				"cash_up": {
 					"forecourt_total": cash_up_before.get("forecourt_total"),
 					"safedrops": cash_up_before.get("safedrops"),
+					"pos_total_credit_card": cash_up_before.get("pos_total_credit_card"),
 					"sales_accounts": {
 						key: value for key, value in cash_up_before.items()
 						if re.fullmatch(r"sales_account_\d+", key)
@@ -1931,6 +2129,8 @@ def fuel_report_import(request, slug):
 			cash_up_values["safedrops"] = str(selected_cash_up["safedrops"])
 			cash_up_values["sales_account_1"] = str(selected_cash_up["account_1"])
 			cash_up_values["payout_1"] = str(selected_cash_up["payout_1"])
+			if "credit_card_total" in selected_cash_up:
+				cash_up_values["pos_total_credit_card"] = str(selected_cash_up["credit_card_total"])
 			repeat_counts = dict(cash_up_values.get("repeat_counts", {}))
 			repeat_counts.update({"sales_account": 1, "payouts": 1})
 			cash_up_values["repeat_counts"] = repeat_counts
@@ -1957,6 +2157,7 @@ def fuel_report_import(request, slug):
 					"safedrops": cash_up_values["safedrops"],
 					"sales_account_1": cash_up_values["sales_account_1"],
 					"payout_1": cash_up_values["payout_1"],
+					"pos_total_credit_card": cash_up_values.get("pos_total_credit_card"),
 				},
 				"tank_readings": {
 					str(tank_id): {"opening_dip_litres": str(opening), "dip_litres": str(closing)}
