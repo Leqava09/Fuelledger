@@ -14,9 +14,9 @@
     <div class="form-section-title"><span>01</span><h2>Review report values</h2></div>
     <p>Report date: <strong>{{ report.business_date }}</strong>. This full-day report imports readings and mapped cash-up values together into the selected shift.</p>
     <p>Review every mapping and value. Nothing is saved until you confirm.</p>
-    {% if overwrite_existing or overwrite_cash_up %}<div class="report-import-notice" role="status">This shift already has saved data. Confirming will replace matching electronic and tank readings, imported fuel sales, and the mapped cash-up values.</div>{% endif %}
+    {% if overwrite_existing or overwrite_cash_up %}<div class="report-import-notice" role="status">This shift already has saved data. Confirming will replace matching electronic and mechanical readings, tank readings, imported fuel sales, and the mapped cash-up values.</div>{% endif %}
     {% if report.warnings %}<div class="report-import-notice" role="status"><strong>Report checks need review</strong><ul>{% for warning in report.warnings %}<li>{{ warning }}</li>{% endfor %}</ul></div>{% endif %}
-    {% if opening_mismatches %}<div class="report-import-notice" role="alert"><strong>Opening readings differ from the previous shift</strong><ul>{% for mismatch in opening_mismatches %}<li>{{ mismatch.nozzle }}: previous closing {{ mismatch.previous_reading }} L; report opening {{ mismatch.entered_opening }} L.</li>{% endfor %}</ul><label><input type="checkbox" name="opening_mismatch_confirmed" value="1" required> Confirm import and notify HQ for review</label></div>{% endif %}
+    {% if opening_mismatches %}<div class="report-import-notice" role="alert"><strong>Opening readings differ from the previous shift</strong><ul>{% for mismatch in opening_mismatches %}<li>{{ mismatch.reading_type|title }} — {{ mismatch.nozzle }}: previous closing {{ mismatch.previous_reading }} L; report opening {{ mismatch.entered_opening }} L.</li>{% endfor %}</ul><label><input type="checkbox" name="opening_mismatch_confirmed" value="1" required> Confirm import and notify HQ for review</label></div>{% endif %}
     <form method="post" class="entry-form">
         {% csrf_token %}
         <input type="hidden" name="action" value="confirm">
@@ -31,13 +31,13 @@
         <div class="reading-table-wrap">
             <h3>Electronic Readings</h3>
             <table class="reading-table">
-                <thead><tr><th>Report nozzle</th><th>Grade</th><th>Opening</th><th>Closing</th><th>Calculated Difference</th><th>Totalizer in L</th><th>Configured nozzle</th></tr></thead>
+                <thead><tr><th>Report nozzle</th><th>Grade</th><th>Previous shift (Opening)</th><th>Electronic Reading (Closing)</th><th>Calculated Difference</th><th>Totalizer in L</th><th>Configured nozzle</th></tr></thead>
                 <tbody>
                     {% for row in report.nozzles %}
                     <tr>
                         <td>{{ row.number }}</td>
                         <td>{{ row.grade }}</td>
-                        <td>{{ row.opening }}</td>
+                        <td>{{ row.review_opening }}</td>
                         <td>{{ row.closing }}</td>
                         <td>{{ row.calculated_difference }}</td>
                         <td>{{ row.totalizer_litres }}</td>
@@ -52,10 +52,31 @@
                 </tbody>
             </table>
         </div>
+        {% if report.mechanical_nozzles %}
+        <div class="reading-table-wrap">
+            <h3>Mechanical Readings</h3>
+            <table class="reading-table">
+                <thead><tr><th>Report nozzle</th><th>Grade</th><th>Previous shift (Opening)</th><th>Mechanical Reading (Closing)</th><th>Calculated Difference</th><th>Totalizer in L</th><th>Configured nozzle</th></tr></thead>
+                <tbody>
+                    {% for row in report.mechanical_nozzles %}
+                    <tr>
+                        <td>{{ row.number }}</td>
+                        <td>{{ row.grade }}</td>
+                        <td>{{ row.review_opening }}</td>
+                        <td>{{ row.closing }}</td>
+                        <td>{{ row.calculated_difference }}</td>
+                        <td>{{ row.totalizer_litres }}</td>
+                        <td>{{ row.selected_nozzle_label|default:"Choose the matching nozzle in Electronic Readings above" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
         <div class="reading-table-wrap">
             <h3>Fuel Sales</h3>
             <table class="reading-table">
-                <thead><tr><th>Report grade</th><th>Sales (L)</th><th>Configured product</th></tr></thead>
+                <thead><tr><th>Report grade</th><th>Fuel sales litre (L)</th><th>Configured product</th></tr></thead>
                 <tbody>
                     {% for row in report.fuel_sales %}
                     <tr>
@@ -94,16 +115,51 @@
             </table>
         </div>
         <div class="reading-table-wrap">
-            <h3>Cash Up</h3>
+            <h3>Total Sales</h3>
             <table class="reading-table">
-                <thead><tr><th>Report value</th><th>Cash-up field</th><th>Amount</th></tr></thead>
+                <thead><tr><th>POS value</th><th>Cash-up field</th><th>Amount</th></tr></thead>
                 <tbody>
                     <tr><td>Fuel sales Value ExVAT</td><td>Total amount Forecourt</td><td><input type="number" name="cash_up_forecourt_total" value="{{ report.cash_up.forecourt_total }}" min="0" step="0.01" required></td></tr>
-                    <tr><td>Money Drops for Period</td><td>Safedrops</td><td><input type="number" name="cash_up_safedrops" value="{{ report.cash_up.safedrops }}" min="0" step="0.01" required></td></tr>
-                    <tr><td>Total Account</td><td>Account 1</td><td><input type="number" name="cash_up_account_1" value="{{ report.cash_up.account_1 }}" min="0" step="0.01" required></td></tr>
-                    <tr><td>Total Payouts</td><td>Payout 1</td><td><input type="number" name="cash_up_payout_1" value="{{ report.cash_up.payout_1 }}" min="0" step="0.01" required></td></tr>
-                    <tr><td>Total Credit Card</td><td>Total From POS (Card Machines)</td><td>{% if report.cash_up.credit_card_total != None %}{{ report.cash_up.credit_card_total|floatformat:2 }}{% else %}Not found in report{% endif %}</td></tr>
+                    <tr><td>Dry sales Value Incl VAT</td><td>Total amount Shop</td><td>{% if report.cash_up.shop_total != None %}<input type="number" name="cash_up_shop_total" value="{{ report.cash_up.shop_total }}" min="0" step="0.01">{% else %}Not found in report{% endif %}</td></tr>
                 </tbody>
+            </table>
+        </div>
+        <div class="reading-table-wrap">
+            <h3>Cash</h3>
+            <table class="reading-table">
+                <thead><tr><th>POS value</th><th>Cash-up field</th><th>Amount</th></tr></thead>
+                <tbody>
+                    <tr><td>Money Drops for Period</td><td>Safedrops</td><td><input type="number" name="cash_up_safedrops" value="{{ report.cash_up.safedrops }}" min="0" step="0.01" required></td></tr>
+                    <tr><td>Total Left in Drawer</td><td>Float</td><td>{% if report.cash_up.cash_float != None %}<input type="number" name="cash_up_cash_float" value="{{ report.cash_up.cash_float }}" min="0" step="0.01">{% else %}Not found in report{% endif %}</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="reading-table-wrap">
+            <h3>Account</h3>
+            <table class="reading-table">
+                <thead><tr><th>POS value</th><th>Cash-up field</th><th>Amount</th></tr></thead>
+                <tbody><tr><td>Total Account</td><td>Account 1</td><td><input type="number" name="cash_up_account_1" value="{{ report.cash_up.account_1 }}" min="0" step="0.01" required></td></tr></tbody>
+            </table>
+        </div>
+        <div class="reading-table-wrap">
+            <h3>Card Machines</h3>
+            <table class="reading-table">
+                <thead><tr><th>POS value</th><th>Cash-up field</th><th>Amount</th></tr></thead>
+                <tbody><tr><td>Total Credit Card</td><td>Total From POS</td><td>{% if report.cash_up.credit_card_total != None %}{{ report.cash_up.credit_card_total|floatformat:2 }}{% else %}Not found in report{% endif %}</td></tr></tbody>
+            </table>
+        </div>
+        <div class="reading-table-wrap">
+            <h3>Vouchers</h3>
+            <table class="reading-table">
+                <thead><tr><th>POS value</th><th>Cash-up field</th><th>Amount</th></tr></thead>
+                <tbody><tr><td>Total Cheque</td><td>Voucher 1</td><td>{% if report.cash_up.voucher_1 != None %}<input type="number" name="cash_up_voucher_1" value="{{ report.cash_up.voucher_1 }}" min="0" step="0.01">{% else %}Not found in report{% endif %}</td></tr></tbody>
+            </table>
+        </div>
+        <div class="reading-table-wrap">
+            <h3>Payouts</h3>
+            <table class="reading-table">
+                <thead><tr><th>POS value</th><th>Cash-up field</th><th>Amount</th></tr></thead>
+                <tbody><tr><td>Total Payouts</td><td>Payout 1</td><td><input type="number" name="cash_up_payout_1" value="{{ report.cash_up.payout_1 }}" min="0" step="0.01" required></td></tr></tbody>
             </table>
         </div>
         <div class="form-row"><label><input type="checkbox" name="remember_mappings" checked> Remember these nozzle, product, and tank matches for future reports</label></div>

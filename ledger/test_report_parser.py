@@ -12,11 +12,15 @@ class ReportParserTests(SimpleTestCase):
 	REPORT_TEXT = """Business Analysis Report
 From: 2026-10-06 00:00:00                      To:2026-10-06 23:59:59
 Transactions summary as per POS system
+Dry sales: 784.000 10482.96 1169.38 11652.34 2687.10 14.86
 Fuel sales:                             4083.530           119973.10                    .00          119973.10          119973.10             593.93
 Sales Report from Pumps (Electronic totalizer movement by nozzle)
   1    DIESEL50PPM        7040.00       7667.00                        627.00              626.58                    -.42
    3     ULP93                  834621.00          834796.00            175.00                175.36                  .36
 Totals:          802.00              801.94                  -.06
+Sales Report from Pumps (Machinical totalizer movement by nozzle)
+Nozzle Grade Opening Volume Closing Volume Totalizer in L Fuel Sales Variance
+   1 DIESEL50PPM 7040.00 7667.00 627.00 626.58 -.42
 Fuel Sales Summary
 DIESEL50PPM                            626.580             19769.60                    .00                   71                    8.82
 ULP93                                  175.360              4700.00                    .00                   52                    3.37
@@ -24,8 +28,10 @@ Totals:           801.940             24469.60                    .00           
 Payment and Bankable cash analysis summary
 Total Account:                2162.20                    Total Cash:                 29564.84              Money Drops:                25130.00
 Total Credit Card:             18250.35
+TotalCheque: 60.50
 Total Payouts:                 2142.45
 Money Drops for Period:                  25130.00
+Total Left in Drawer: 2292.39
 Fuel Sales by Grade
 Sales Report: calculated from Purchases and Dips
 Opening Values
@@ -59,6 +65,11 @@ ULP93                    1235.25 @ 2026-10-06 04:55:00         64.75            
 		self.assertEqual(parsed["cash_up"]["account_1"], Decimal("2162.20"))
 		self.assertEqual(parsed["cash_up"]["payout_1"], Decimal("2142.45"))
 		self.assertEqual(parsed["cash_up"]["credit_card_total"], Decimal("18250.35"))
+		self.assertEqual(parsed["cash_up"]["shop_total"], Decimal("11652.34"))
+		self.assertEqual(parsed["cash_up"]["cash_float"], Decimal("2292.39"))
+		self.assertEqual(parsed["cash_up"]["voucher_1"], Decimal("60.50"))
+		self.assertEqual(len(parsed["mechanical_nozzles"]), 1)
+		self.assertEqual(parsed["mechanical_nozzles"][0]["totalizer_litres"], Decimal("627.00"))
 		self.assertEqual(parsed["warnings"], [])
 
 	def test_rejects_unrecognized_numbered_nozzle_rows(self):
@@ -86,6 +97,18 @@ ULP93                    1235.25 @ 2026-10-06 04:55:00         64.75            
 		parsed = parse_report(text)
 
 		self.assertIsNone(parsed["cash_up"]["credit_card_total"])
+
+	def test_mechanical_readings_are_optional(self):
+		text = self.REPORT_TEXT.replace(
+			"Sales Report from Pumps (Machinical totalizer movement by nozzle)\n"
+			"Nozzle Grade Opening Volume Closing Volume Totalizer in L Fuel Sales Variance\n"
+			"   1 DIESEL50PPM 7040.00 7667.00 627.00 626.58 -.42\n",
+			"",
+		)
+
+		parsed = parse_report(text)
+
+		self.assertEqual(parsed["mechanical_nozzles"], [])
 
 	def test_enforces_pdf_page_limit(self):
 		pdfplumber = ModuleType("pdfplumber")

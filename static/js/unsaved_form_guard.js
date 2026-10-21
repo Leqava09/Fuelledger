@@ -23,6 +23,13 @@
 			return;
 		}
 	};
+	const removeSessionStorage = (key) => {
+		try {
+			sessionStorage.removeItem(key);
+		} catch {
+			return;
+		}
+	};
 	const savedForm = currentUrl.searchParams.get("workflow_saved");
 	const dashboardScope = document.querySelector("[data-cash-up-draft-key]")?.dataset.cashUpDraftKey;
 	if (savedForm && dashboardScope) {
@@ -51,6 +58,26 @@
 	const saveButton = makeButton("Save and Return", "button primary", () => {
 		const pending = dialog.pendingReturn;
 		if (!pending) return;
+		if (pending.nextSection) {
+			const nextSection = pending.form.elements.namedItem("next_section");
+			const continueButton = pending.form.querySelector('button[name="save_mode"][value="continue"]')
+				|| document.querySelector(`button[form="${pending.form.id}"][name="save_mode"][value="continue"]`);
+			if (nextSection && continueButton) {
+				nextSection.value = pending.nextSection;
+				pending.form.requestSubmit(continueButton);
+				return;
+			}
+		}
+		if (pending.nextForm) {
+			const nextForm = pending.form.elements.namedItem("next_form");
+			const continueButton = pending.form.querySelector('button[name="save_mode"][value="continue"]')
+				|| document.querySelector(`button[form="${pending.form.id}"][name="save_mode"][value="continue"]`);
+			if (nextForm && continueButton) {
+				nextForm.value = pending.nextForm;
+				pending.form.requestSubmit(continueButton);
+				return;
+			}
+		}
 		const exitButton = pending.form.querySelector('button[name="save_mode"][value="exit"]')
 			|| document.querySelector(`button[form="${pending.form.id}"][name="save_mode"][value="exit"]`);
 		if (exitButton) pending.form.requestSubmit(exitButton);
@@ -60,12 +87,16 @@
 		if (!pending) return;
 		if (pending.cashUp) {
 			const storageKey = `fuelledger-cashup:${pending.form.dataset.draftKey}`;
-			try {
-				const drafts = JSON.parse(localStorage.getItem(storageKey) || "{}");
-				delete drafts[pending.form.dataset.draftSection];
-				localStorage.setItem(storageKey, JSON.stringify(drafts));
-			} catch {
-				removeStorage(storageKey);
+			if (!pending.nextSection) {
+				removeSessionStorage(storageKey);
+			} else {
+				try {
+					const drafts = JSON.parse(sessionStorage.getItem(storageKey) || "{}");
+					delete drafts[pending.form.dataset.draftSection];
+					sessionStorage.setItem(storageKey, JSON.stringify(drafts));
+				} catch {
+					removeSessionStorage(storageKey);
+				}
 			}
 		} else {
 			removeStorage(pending.storageKey);
@@ -141,9 +172,12 @@
 			dialog.pendingReturn = {
 				form,
 				cashUp: form.classList.contains("cash-up-form"),
+				nextSection: link.dataset.cashUpSection || "",
+				nextForm: link.dataset.unsavedNextForm || "",
 				storageKey: `fuelledger-workflow-draft:${form.dataset.workflowDraftScope}:${form.dataset.workflowDraftKey}`,
 				href: link.href,
 			};
+			saveButton.textContent = dialog.pendingReturn.nextSection || dialog.pendingReturn.nextForm ? "Save and Continue" : "Save and Return";
 			dialog.showModal();
 		});
 	});

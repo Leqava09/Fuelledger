@@ -1,6 +1,7 @@
 from io import BytesIO
 import calendar
 import json
+import os
 import re
 import tempfile
 from decimal import Decimal
@@ -11,6 +12,7 @@ from datetime import date, datetime, timedelta
 
 from django.contrib import admin
 from django.contrib.auth.models import Group, User
+from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
@@ -35,6 +37,7 @@ from ledger.models import (
     ManualShopPoint,
     Nozzle,
     NozzleFuelReading,
+    POSReportAttachment,
     Site,
     SiteAuditEvent,
     SiteGroup,
@@ -1216,6 +1219,11 @@ class SiteAccessTests(TestCase):
 
 class DailyFuelReadingWorkflowTests(TestCase):
     def setUp(self):
+        self.media_root = tempfile.TemporaryDirectory()
+        self.addCleanup(self.media_root.cleanup)
+        media_override = override_settings(MEDIA_ROOT=self.media_root.name)
+        media_override.enable()
+        self.addCleanup(media_override.disable)
         self.site = Site.objects.create(name="Reading Site", shift_count=2)
         self.tank = Tank.objects.create(site=self.site, name="Tank 1", product="Diesel")
         self.tank_two = Tank.objects.create(site=self.site, name="Tank 2", product="Petrol")
@@ -1257,7 +1265,10 @@ class DailyFuelReadingWorkflowTests(TestCase):
                 "safedrops": Decimal("25130.00"),
                 "account_1": Decimal("2162.20"),
                 "payout_1": Decimal("2142.45"),
+                "shop_total": Decimal("11652.34"),
+                "cash_float": Decimal("2292.39"),
                 "credit_card_total": Decimal("18250.35"),
+                "voucher_1": Decimal("60.50"),
             },
             "fuel_sales": [
                 {"grade": "Diesel", "litres": Decimal("2166.44")},
@@ -1287,6 +1298,15 @@ class DailyFuelReadingWorkflowTests(TestCase):
                     "variance": Decimal("-0.05"),
                 },
             ],
+            "mechanical_nozzles": [{
+                "number": 1,
+                "grade": "DIESEL50PPM",
+                "opening": Decimal("8000.00"),
+                "closing": Decimal("8600.00"),
+                "totalizer_litres": Decimal("600.00"),
+                "sales_litres": Decimal("600.00"),
+                "variance": Decimal("0.00"),
+            }],
         }
         upload_url = f"{reverse('fuel-report-import', args=[self.site.slug])}?date=2026-10-06&shift=Night"
         upload = SimpleUploadedFile("report.pdf", b"%PDF-report", content_type="application/pdf")
@@ -1299,6 +1319,8 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertContains(preview, "full-day report")
         self.assertContains(preview, "Pump fuel sales do not match")
         self.assertContains(preview, "18250.35")
+        self.assertContains(preview, "Mechanical Readings")
+        self.assertEqual(preview.context["report"]["nozzles"][0]["review_opening"], "7040.00")
         self.assertFalse(preview.context["overwrite_existing"])
         self.assertFalse(DailyFuelReading.objects.exists())
         token = preview.context["report_token"]
@@ -1318,9 +1340,12 @@ class DailyFuelReadingWorkflowTests(TestCase):
             "tank_opening_petrol_1": "100.00",
             "tank_closing_petrol_1": "200.00",
             "cash_up_forecourt_total": "119973.10",
+            "cash_up_shop_total": "11652.34",
             "cash_up_safedrops": "25130.00",
+            "cash_up_cash_float": "2292.39",
             "cash_up_account_1": "2162.20",
             "cash_up_payout_1": "2142.45",
+            "cash_up_voucher_1": "60.50",
             "remember_mappings": "on",
         })
 
@@ -1329,6 +1354,8 @@ class DailyFuelReadingWorkflowTests(TestCase):
         first = reading.nozzle_readings.get(nozzle=self.nozzle)
         self.assertEqual(first.electronic_opening_reading, Decimal("7040.00"))
         self.assertEqual(first.electronic_reading, Decimal("7667.00"))
+        self.assertEqual(first.mechanical_opening_reading, Decimal("8000.00"))
+        self.assertEqual(first.mechanical_reading, Decimal("8600.00"))
         second = reading.nozzle_readings.get(nozzle=self.nozzle_two)
         self.assertEqual(second.electronic_opening_reading, Decimal("727245.00"))
         self.assertEqual(second.electronic_reading, Decimal("727464.00"))
@@ -1344,7 +1371,17 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertEqual(cash_up.values["safedrops"], "25130.00")
         self.assertEqual(cash_up.values["sales_account_1"], "2162.20")
         self.assertEqual(cash_up.values["payout_1"], "2142.45")
+        self.assertEqual(cash_up.values["shop_total"], "11652.34")
+        self.assertEqual(cash_up.values["cash_float"], "2292.39")
+        self.assertEqual(cash_up.values["voucher_1"], "60.50")
         self.assertEqual(cash_up.values["pos_total_credit_card"], "18250.35")
+        self.assertEqual(cash_up.values["totals"]["fuel"], "131625.44")
+        self.assertEqual(cash_up.values["totals"]["cash"], "27422.39")
+        self.assertEqual(cash_up.values["totals"]["vouchers"], "60.50")
+        self.assertEqual(cash_up.values["totals"]["manual_shop"], "0")
+        attachment = POSReportAttachment.objects.get(site=self.site, business_date=date(2026, 10, 6))
+        self.assertTrue(attachment.pdf)
+        self.assertIsNotNone(attachment.imported_at)
         self.site.refresh_from_db()
         self.assertEqual(self.site.report_nozzle_mapping, {"1": self.nozzle.pk, "2": self.nozzle_two.pk})
         self.assertEqual(self.site.report_product_mapping, {"diesel": "Diesel", "petrol": "Petrol"})
@@ -1434,11 +1471,16 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertEqual(alert.previous_reading, Decimal("7000.00"))
         self.assertEqual(alert.entered_opening, Decimal("7040.00"))
         self.assertFalse(alert.approved)
+        imported_reading = DailyFuelReading.objects.get(site=self.site, business_date=date(2026, 10, 6))
+        self.assertEqual(
+            imported_reading.nozzle_readings.get(nozzle=self.nozzle).electronic_opening_reading,
+            Decimal("7000.00"),
+        )
 
         hq_user = User.objects.create_user(username="fuel-alert-hq", password="test-pass-123")
         UserProfile.objects.create(user=hq_user, role=UserProfile.Role.HQ)
         self.client.force_login(hq_user)
-        self.assertContains(self.client.get(reverse("hq-dashboard")), "Fuel reading opening mismatches")
+        self.assertContains(self.client.get(reverse("hq-dashboard")), "Electronic reading opening mismatch")
         approved = self.client.post(reverse("approve-fuel-reading-alert", args=[alert.pk]))
         self.assertRedirects(approved, reverse("hq-dashboard"), fetch_redirect_response=False)
         alert.refresh_from_db()
@@ -1504,6 +1546,27 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertContains(response, "fuel-reading-tab--fuel-sales")
         for reading_type in ("tank-reading", "fuel-sales", "mechanical-readings", "electronic-readings"):
             self.assertContains(response, reverse("fuel-reading-entry", args=[self.site.slug, reading_type]))
+
+    def test_saving_fuel_readings_can_continue_to_the_selected_tab(self):
+        url = reverse("fuel-reading-entry", args=[self.site.slug, "fuel-sales"])
+        page = self.client.get(url, {"date": self.business_date.isoformat(), "shift": "Night"})
+        form = page.context["form"]
+        payload = {
+            "business_date": self.business_date.isoformat(),
+            "shift_label": "Night",
+            "save_mode": "continue",
+            "next_form": "mechanical-readings",
+        }
+        payload.update({field_name: "0.00" for _, field_name in form.product_fields})
+
+        response = self.client.post(url, payload)
+
+        self.assertRedirects(
+            response,
+            f"{reverse('fuel-reading-entry', args=[self.site.slug, 'mechanical-readings'])}"
+            f"?date={self.business_date.isoformat()}&shift=Night&workflow_saved=fuel-sales",
+            fetch_redirect_response=False,
+        )
 
     def test_site_reading_selection_filters_tabs_entry_and_fuel_report(self):
         self.site.use_tank_readings = False
@@ -2390,7 +2453,7 @@ class CashUpWorkflowTests(TestCase):
         self.assertContains(cash_page, "Coins")
         self.assertContains(cash_page, "Safedrops")
         self.assertContains(cash_page, 'class="currency-prefix">ZAR</span>')
-        self.assertContains(cash_page, "js/cash_up.js")
+        self.assertRegex(cash_page.content.decode(), r"js/cash_up(?:\.[0-9a-f]+)?\.js")
         self.assertNotContains(cash_page, "<h2>Cash</h2>")
         self.assertContains(cash_page, "Save and Continue")
         self.assertContains(cash_page, "Save and Exit")
@@ -2624,7 +2687,7 @@ class CashUpWorkflowTests(TestCase):
 
         self.assertRedirects(
             response,
-            f"{self.cash_up_url('summary')}?date={self.business_date.isoformat()}&shift=Night&saved=airtime",
+            f"{self.cash_up_url('summary')}?date={self.business_date.isoformat()}&shift=Night&saved=airtime&workflow_saved=airtime",
         )
 
     def test_cash_coins_and_safedrops_are_saved_and_totalled(self):
@@ -2645,34 +2708,29 @@ class CashUpWorkflowTests(TestCase):
         self.assertContains(reopened, "12.75")
         self.assertContains(reopened, 'value="10.25"')
 
-    def test_fuel_tab_uses_site_tanks_and_saves_a_currency_total(self):
-        tank_one = Tank.objects.create(site=self.site, name="Tank 1", product="Diesel")
-        tank_two = Tank.objects.create(site=self.site, name="Tank 2", product=" diesel ")
-        tank_three = Tank.objects.create(site=self.site, name="Tank 3", product="Petrol")
-        other_site = Site.objects.create(name="Other Fuel Site")
-        Tank.objects.create(site=other_site, name="Other Tank", product="Diesel")
+    def test_fuel_tab_saves_forecourt_and_shop_sales_totals(self):
         page = self.client.get(self.cash_up_url("fuel"), self.cash_up_query())
         self.assertEqual(page.status_code, 200)
         fuel_fields = {label: key for key, label in page.context["form"].entry_fields}
-        self.assertEqual(set(fuel_fields), {"Diesel", "Petrol"})
-        self.assertNotContains(page, "Tank 1")
-        self.assertNotContains(page, "Tank 2")
-        self.assertNotContains(page, "Other Tank")
-        self.assertContains(page, "Total Fuel")
+        self.assertEqual(fuel_fields, {
+            "Total amount Forecourt": "forecourt_total",
+            "Total amount Shop": "shop_total",
+        })
+        self.assertContains(page, "Total Sales")
         self.assertEqual(page.content.decode().count('class="currency-prefix">ZAR</span>'), 3)
         response = self.client.post(
             f"{self.cash_up_url('fuel')}?date={self.business_date.isoformat()}&shift=Night",
             {
                 "business_date": self.business_date.isoformat(),
                 "shift_label": "Night",
-                fuel_fields["Diesel"]: "12.50",
-                fuel_fields["Petrol"]: "25.25",
+                fuel_fields["Total amount Forecourt"]: "12.50",
+                fuel_fields["Total amount Shop"]: "25.25",
             },
         )
         self.assertEqual(response.status_code, 302)
         record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
-        self.assertEqual(record.values[fuel_fields["Diesel"]], "12.50")
-        self.assertEqual(record.values[fuel_fields["Petrol"]], "25.25")
+        self.assertEqual(record.values["forecourt_total"], "12.50")
+        self.assertEqual(record.values["shop_total"], "25.25")
         self.assertEqual(record.values["totals"]["fuel"], "37.75")
         reopened = self.client.get(self.cash_up_url("fuel"), self.cash_up_query())
         self.assertContains(reopened, "37.75")
@@ -2746,21 +2804,21 @@ class CashUpWorkflowTests(TestCase):
         self.assertNotContains(response, "Total Airtime")
         self.assertNotContains(response, "Total Airtime Loaded")
 
-    def test_airtime_difference_is_system_minus_slip(self):
+    def test_airtime_difference_is_slip_minus_system(self):
         response = self.client.post(
             f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
             {
                 "business_date": self.business_date.isoformat(),
                 "shift_label": "Night",
-                "airtime_slip": "12.00",
-                "airtime_system": "17.00",
+                "airtime_slip": "2334.00",
+                "airtime_system": "2335.00",
             },
         )
 
         self.assertEqual(response.status_code, 302)
         page = self.client.get(self.cash_up_url("airtime"), self.cash_up_query())
-        self.assertContains(page, "5.00")
-        self.assertEqual(page.context["airtime_rows"][0]["difference"], Decimal("5.00"))
+        self.assertContains(page, "-1.00")
+        self.assertEqual(page.context["airtime_rows"][0]["difference"], Decimal("-1.00"))
 
     def test_airtime_first_balance_is_manual_and_later_balances_chain(self):
         CashUpShiftRecord.objects.create(
@@ -2911,8 +2969,8 @@ class CashUpWorkflowTests(TestCase):
         remove_buttons = re.findall(r'<button class="remove-repeat-row"[^>]*>', response.content.decode())
         self.assertEqual(len(remove_buttons), 2)
         self.assertTrue(all("disabled" not in button for button in remove_buttons))
-        self.assertContains(response, "-2.00")
-        self.assertContains(response, "1.00")
+        self.assertContains(response, "2.00")
+        self.assertContains(response, "-1.00")
 
         response = self.client.post(
             f"{self.cash_up_url('airtime')}?date={self.business_date.isoformat()}&shift=Night",
@@ -3027,6 +3085,13 @@ class CashUpWorkflowTests(TestCase):
         self.assertContains(manual_page, 'data-pos-card-total="50.00">50.00')
         self.assertContains(manual_page, ">5.25</strong>")
 
+    def test_cash_up_section_tabs_are_unsaved_change_targets(self):
+        page = self.client.get(self.cash_up_url("cash"), self.cash_up_query())
+
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, 'data-unsaved-return data-cash-up-section="vouchers"')
+        self.assertContains(page, 'name="next_section"')
+
     def test_sales_account_total_and_airtime_difference_start_from_saved_values(self):
         self.client.post(
             f"{self.cash_up_url('sales-account')}?date={self.business_date.isoformat()}&shift=Night",
@@ -3057,3 +3122,101 @@ class CashUpWorkflowTests(TestCase):
         )
         airtime_page = self.client.get(self.cash_up_url("airtime"), self.cash_up_query())
         self.assertContains(airtime_page, "6.25")
+
+
+class POSClearanceTests(TestCase):
+    def setUp(self):
+        self.media_root = tempfile.TemporaryDirectory()
+        self.addCleanup(self.media_root.cleanup)
+        media_override = override_settings(MEDIA_ROOT=self.media_root.name)
+        media_override.enable()
+        self.addCleanup(media_override.disable)
+        self.site = Site.objects.create(name="Clearance Site", shift_count=2)
+        self.user = User.objects.create_user(username="pos-clearance-hq", password="test-password")
+        UserProfile.objects.create(user=self.user, role=UserProfile.Role.HQ)
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def create_pdf(self, business_date, uploaded_at=None):
+        attachment = POSReportAttachment.objects.create(
+            site=self.site,
+            business_date=business_date,
+            shift_label="Night",
+            uploaded_by=self.user,
+            uploaded_at=uploaded_at or timezone.now(),
+        )
+        attachment.pdf.save(
+            f"{business_date.isoformat()}.pdf",
+            ContentFile(b"%PDF-test"),
+            save=True,
+        )
+        if uploaded_at is not None:
+            attachment.uploaded_at = uploaded_at
+            attachment.save(update_fields=["uploaded_at"])
+        return attachment
+
+    def test_date_clearance_deletes_only_selected_pdf_and_preserves_import_data(self):
+        target = self.create_pdf(date(2026, 10, 6))
+        keep = self.create_pdf(date(2026, 10, 7))
+        record = CashUpShiftRecord.objects.create(
+            site=self.site,
+            business_date=date(2026, 10, 6),
+            shift_label="Night",
+            created_by=self.user,
+            values={"forecourt_total": "100.00"},
+        )
+        target_path = target.pdf.path
+        keep_path = keep.pdf.path
+
+        response = self.client.post(reverse("pos-clearance", args=[self.site.slug]), {
+            "action": "clear_date",
+            "business_date": "2026-10-06",
+            "confirm": "on",
+        })
+
+        self.assertRedirects(response, reverse("pos-clearance", args=[self.site.slug]), fetch_redirect_response=False)
+        target.refresh_from_db()
+        keep.refresh_from_db()
+        record.refresh_from_db()
+        self.assertFalse(target.pdf)
+        self.assertTrue(keep.pdf)
+        self.assertFalse(os.path.exists(target_path))
+        self.assertTrue(os.path.exists(keep_path))
+        self.assertEqual(POSReportAttachment.objects.count(), 2)
+        self.assertEqual(record.values["forecourt_total"], "100.00")
+        dashboard = self.client.get(reverse("hq-dashboard"))
+        self.assertContains(dashboard, "POS Clearance (1)")
+
+    def test_retention_clearance_removes_only_pdfs_older_than_selected_days(self):
+        old_attachment = self.create_pdf(date(2026, 9, 1), timezone.now() - timedelta(days=40))
+        recent_attachment = self.create_pdf(date(2026, 10, 7))
+        old_path = old_attachment.pdf.path
+        recent_path = recent_attachment.pdf.path
+
+        response = self.client.post(reverse("pos-clearance", args=[self.site.slug]), {
+            "action": "keep_days",
+            "keep_days": "30",
+            "confirm": "on",
+        })
+
+        self.assertEqual(response.status_code, 302)
+        old_attachment.refresh_from_db()
+        recent_attachment.refresh_from_db()
+        self.assertFalse(old_attachment.pdf)
+        self.assertTrue(recent_attachment.pdf)
+        self.assertFalse(os.path.exists(old_path))
+        self.assertTrue(os.path.exists(recent_path))
+
+    def test_clear_all_removes_only_pdf_files_and_keeps_attachment_rows(self):
+        attachments = [self.create_pdf(date(2026, 10, day)) for day in (6, 7)]
+
+        response = self.client.post(reverse("pos-clearance", args=[self.site.slug]), {
+            "action": "clear_all",
+            "confirm": "on",
+        })
+
+        self.assertEqual(response.status_code, 302)
+        for attachment in attachments:
+            attachment.refresh_from_db()
+            self.assertFalse(attachment.pdf)
+        self.assertEqual(POSReportAttachment.objects.count(), 2)

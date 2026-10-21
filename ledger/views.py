@@ -16,6 +16,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.contrib.auth.models import User
+from django.db.models import Count
 
 from django.views.decorators.http import require_POST
 from .forms import (
@@ -43,6 +44,7 @@ from .models import (
 	ManualShopPoint,
 	NozzleFuelReading,
 	Nozzle,
+	POSReportAttachment,
 	ShiftEntry,
 	Site,
 	SiteAuditEvent,
@@ -244,7 +246,9 @@ def home(request):
 def hq_dashboard(request):
 	if not request.user.is_superuser and (not _profile(request.user) or _profile(request.user).role != "HQ"):
 		return HttpResponseForbidden("HQ access is restricted to HQ users.")
-	sites = Site.objects.filter(is_active=True).order_by("name")
+	sites = Site.objects.filter(is_active=True).annotate(
+		pos_pdf_count=Count("pos_report_attachments", filter=Q(pos_report_attachments__pdf__gt="")),
+	).order_by("name")
 	pending_airtime_alerts = AirtimeSequenceAlert.objects.filter(approved=False).select_related(
 		"site", "cash_up_record", "flagged_by",
 	).order_by("-created_at")
@@ -280,6 +284,68 @@ def hq_dashboard(request):
 			+ len(pending_card_machine_alerts)
 			+ len(pending_fuel_reading_alerts)
 		),
+	})
+
+
+@login_required
+def pos_clearance(request, slug):
+	profile = _profile(request.user)
+	if not request.user.is_superuser and (not profile or profile.role != UserProfile.Role.HQ):
+		return HttpResponseForbidden("HQ access is restricted to HQ users.")
+	site = get_object_or_404(Site, slug=slug)
+	if request.method == "POST":
+		action = request.POST.get("action")
+		if request.POST.get("confirm") != "on":
+			messages.error(request, "Confirm the POS PDF clearance action before continuing.")
+		else:
+			attachments = POSReportAttachment.objects.filter(site=site).exclude(pdf="")
+			if action == "clear_all":
+				selected = attachments
+				description = "all POS PDFs"
+			elif action == "clear_date":
+				try:
+					selected_date = date.fromisoformat(request.POST.get("business_date", ""))
+				except (TypeError, ValueError):
+					selected_date = None
+				if selected_date is None:
+					messages.error(request, "Select a valid report date.")
+					selected = None
+				else:
+					selected = attachments.filter(business_date=selected_date)
+					description = f"POS PDFs for {selected_date:%d %b %Y}"
+			elif action == "keep_days":
+				try:
+					keep_days = int(request.POST.get("keep_days", ""))
+				except (TypeError, ValueError):
+					keep_days = 0
+				if keep_days not in {7, 14, 30, 60, 90}:
+					messages.error(request, "Select a valid retention period.")
+					selected = None
+				else:
+					cutoff = timezone.now() - timedelta(days=keep_days)
+					selected = attachments.filter(uploaded_at__lt=cutoff)
+					description = f"POS PDFs older than {keep_days} days"
+			else:
+				messages.error(request, "Choose a valid POS clearance action.")
+				selected = None
+			if selected is not None:
+				cleared_count = 0
+				for attachment in selected.iterator():
+					attachment.pdf.delete(save=True)
+					cleared_count += 1
+				messages.success(
+					request,
+					f"Removed {cleared_count} PDF attachment(s) from {description}. Imported cash-up and reading data was not changed.",
+				)
+		return redirect("pos-clearance", slug=site.slug)
+
+	attachments = POSReportAttachment.objects.filter(site=site).exclude(pdf="").order_by("-uploaded_at")
+	return render(request, "ledger/pos_clearance.html", {
+		"site": site,
+		"attachments": attachments[:100],
+		"attachment_count": attachments.count(),
+		"report_dates": attachments.values("business_date").annotate(pdf_count=Count("pk")).order_by("-business_date"),
+		"retention_days": (7, 14, 30, 60, 90),
 	})
 
 
@@ -1126,7 +1192,7 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 		"manual-shop": "manual_",
 		"cash-up-additional": "additional_",
 	}
-	airtime_difference = Decimal(str(initial_values.get("airtime_system") or 0)) - Decimal(str(initial_values.get("airtime_slip") or 0))
+	airtime_difference = Decimal(str(initial_values.get("airtime_slip") or 0)) - Decimal(str(initial_values.get("airtime_system") or 0))
 	group_totals = {
 		"cash": totals["cash"],
 		"vouchers": totals["vouchers"],
@@ -1173,7 +1239,7 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 					row_fields.append((label, form[field_name]))
 			if row_fields:
 				try:
-					difference = Decimal(str(form[f"airtime_system_{index}"].value() or 0)) - Decimal(str(form[f"airtime_slip_{index}"].value() or 0))
+					difference = Decimal(str(form[f"airtime_slip_{index}"].value() or 0)) - Decimal(str(form[f"airtime_system_{index}"].value() or 0))
 				except (ArithmeticError, TypeError, ValueError):
 					difference = Decimal("0")
 				shift_key = "airtime_shift_nr" if index == 1 else f"airtime_shift_nr_{index}"
@@ -1212,6 +1278,7 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 			if pos_total_credit_card is not None else None
 		),
 		"draft_key": f"{request.user.pk}:{site.pk}:{selected_date.isoformat()}:{shift_label}",
+		"next_section": request.POST.get("next_section", "") if request.method == "POST" else "",
 	})
 
 
@@ -1423,6 +1490,15 @@ def _complete_cash_up_save(
 		return redirect(
 			f"{reverse('site-dashboard', args=[site.slug])}"
 			f"?date={selected_date.isoformat()}&shift={shift_label}&cashup_saved=all&workflow_saved={section}"
+		)
+	next_section = request.POST.get("next_section")
+	if not next_section and save_mode == "continue" and section == "airtime":
+		next_section = "summary"
+	if next_section in {key for key, _ in _cash_up_tab_labels(site)}:
+		messages.success(request, f"{section_label_for(section)} saved.")
+		return redirect(
+			f"{reverse('cash-up-entry', args=[site.slug, next_section])}"
+			f"?date={selected_date.isoformat()}&shift={shift_label}&saved={section}&workflow_saved={section}"
 		)
 	messages.success(request, f"{section_label_for(section)} saved.")
 	return redirect(
@@ -1718,6 +1794,7 @@ def _report_nozzle_mapping(site, report_rows, selected_ids=None):
 		}
 		for nozzle, tank in configured_nozzles
 	]
+	labels_by_id = {str(choice["id"]): choice["label"] for choice in nozzle_choices}
 	by_number = {}
 	for nozzle, _ in configured_nozzles:
 		match = re.search(r"(\d+)\s*$", nozzle.name)
@@ -1736,6 +1813,7 @@ def _report_nozzle_mapping(site, report_rows, selected_ids=None):
 		if selected_id in used_ids:
 			selected_id = ""
 		row["selected_nozzle_id"] = selected_id
+		row["selected_nozzle_label"] = labels_by_id.get(str(selected_id), "")
 		if selected_id:
 			used_ids.add(selected_id)
 	return nozzle_choices
@@ -1793,18 +1871,18 @@ def _report_tank_mapping(site, report_rows, selected_tanks=None):
 	return choices
 
 
-def _report_opening_mismatches(site, selected_date, shift_label, report_rows, selected_nozzles):
-	previous_reading = _previous_daily_reading(site, selected_date, shift_label, "electronic-readings")
+def _report_opening_mismatches(site, selected_date, shift_label, report_rows, selected_nozzles, reading_type="electronic"):
+	previous_reading = _previous_daily_reading(site, selected_date, shift_label, f"{reading_type}-readings")
 	if previous_reading is None:
 		return []
 	previous_values = {
-		item.nozzle_id: item.electronic_reading
+		item.nozzle_id: getattr(item, f"{reading_type}_reading")
 		for item in previous_reading.nozzle_readings.all()
-		if item.electronic_reading is not None
+		if getattr(item, f"{reading_type}_reading") is not None
 	}
 	mismatches = []
 	for row in report_rows:
-		nozzle_id = selected_nozzles.get(row["number"])
+		nozzle_id = selected_nozzles.get(row["number"], row.get("selected_nozzle_id"))
 		previous_value = previous_values.get(nozzle_id)
 		if previous_value is None:
 			continue
@@ -1816,14 +1894,62 @@ def _report_opening_mismatches(site, selected_date, shift_label, report_rows, se
 				"nozzle": f"{nozzle.name} / {nozzle.tank.name} / {nozzle.tank.product}",
 				"previous_reading": previous_value,
 				"entered_opening": opening,
+				"reading_type": reading_type,
 			})
 	return mismatches
 
 
 def _report_review_context(site, report, shift_label, selected_nozzles=None, selected_products=None, selected_tanks=None):
 	nozzle_choices = _report_nozzle_mapping(site, report["nozzles"], selected_nozzles)
+	_report_nozzle_mapping(site, report.get("mechanical_nozzles", []), selected_nozzles)
 	product_choices = _report_product_mapping(site, report["fuel_sales"], selected_products)
 	tank_choices = _report_tank_mapping(site, report["tank_readings"], selected_tanks)
+	previous_reading = _previous_daily_reading(
+		site, date.fromisoformat(report["business_date"]), shift_label, "electronic-readings",
+	)
+	previous_values = {
+		item.nozzle_id: item.electronic_reading
+		for item in previous_reading.nozzle_readings.all()
+		if item.electronic_reading is not None
+	} if previous_reading else {}
+	report_warnings = list(report.get("warnings", []))
+	for row in report["nozzles"]:
+		try:
+			nozzle_id = int(row.get("selected_nozzle_id") or 0)
+		except (TypeError, ValueError):
+			nozzle_id = 0
+		opening = previous_values.get(nozzle_id, Decimal(str(row["opening"])))
+		row["previous_reading"] = str(previous_values[nozzle_id]) if nozzle_id in previous_values else None
+		row["review_opening"] = str(opening)
+		calculated_difference = Decimal(str(row["closing"])) - opening
+		row["calculated_difference"] = str(calculated_difference)
+		if abs(calculated_difference - Decimal(str(row["totalizer_litres"]))) > Decimal("0.01"):
+			report_warnings.append(
+				f"Nozzle {row['number']}: closing minus the previous shift reading does not match the report Totalizer in L."
+			)
+	mechanical_previous_reading = _previous_daily_reading(
+		site, date.fromisoformat(report["business_date"]), shift_label, "mechanical-readings",
+	)
+	mechanical_previous_values = {
+		item.nozzle_id: item.mechanical_reading
+		for item in mechanical_previous_reading.nozzle_readings.all()
+		if item.mechanical_reading is not None
+	} if mechanical_previous_reading else {}
+	for row in report.get("mechanical_nozzles", []):
+		try:
+			nozzle_id = int(row.get("selected_nozzle_id") or 0)
+		except (TypeError, ValueError):
+			nozzle_id = 0
+		opening = mechanical_previous_values.get(nozzle_id, Decimal(str(row["opening"])))
+		row["previous_reading"] = str(mechanical_previous_values[nozzle_id]) if nozzle_id in mechanical_previous_values else None
+		row["review_opening"] = str(opening)
+		calculated_difference = Decimal(str(row["closing"])) - opening
+		row["calculated_difference"] = str(calculated_difference)
+		if abs(calculated_difference - Decimal(str(row["totalizer_litres"]))) > Decimal("0.01"):
+			report_warnings.append(
+				f"Mechanical nozzle {row['number']}: closing minus the previous shift reading does not match the report Totalizer in L."
+			)
+	report["warnings"] = list(dict.fromkeys(report_warnings))
 	existing_reading = DailyFuelReading.objects.filter(
 		site=site,
 		business_date=date.fromisoformat(report["business_date"]),
@@ -1839,13 +1965,17 @@ def _report_review_context(site, report, shift_label, selected_nozzles=None, sel
 		or existing_reading.tank_readings.exists()
 		or existing_reading.nozzle_readings.filter(
 			Q(electronic_opening_reading__isnull=False) | Q(electronic_reading__isnull=False)
+			| Q(mechanical_opening_reading__isnull=False) | Q(mechanical_reading__isnull=False)
 		).exists()
 	))
 	overwrite_cash_up = bool(cash_up_record and any(
 		value not in (None, "")
 		for key, value in cash_up_record.values.items()
-		if key in {"forecourt_total", "safedrops", "pos_total_credit_card"}
-		or re.fullmatch(r"sales_account_\d+|payout_\d+", key)
+		if key in {
+			"forecourt_total", "shop_total", "safedrops", "cash_float",
+			"pos_total_credit_card", "voucher_1",
+		}
+		or re.fullmatch(r"sales_account_\d+|payout_\d+|voucher_\d+", key)
 	))
 	return {
 		"site": site,
@@ -1857,12 +1987,22 @@ def _report_review_context(site, report, shift_label, selected_nozzles=None, sel
 		"selected_shift": shift_label,
 		"overwrite_existing": overwrite_existing,
 		"overwrite_cash_up": overwrite_cash_up,
-		"opening_mismatches": _report_opening_mismatches(
-			site,
-			date.fromisoformat(report["business_date"]),
-			shift_label,
-			report["nozzles"],
-			{row["number"]: row["selected_nozzle_id"] for row in report["nozzles"] if row.get("selected_nozzle_id")},
+		"opening_mismatches": (
+			_report_opening_mismatches(
+				site,
+				date.fromisoformat(report["business_date"]),
+				shift_label,
+				report["nozzles"],
+				{row["number"]: row["selected_nozzle_id"] for row in report["nozzles"] if row.get("selected_nozzle_id")},
+			)
+			+ _report_opening_mismatches(
+				site,
+				date.fromisoformat(report["business_date"]),
+				shift_label,
+				report.get("mechanical_nozzles", []),
+				{row["number"]: row["selected_nozzle_id"] for row in report.get("mechanical_nozzles", []) if row.get("selected_nozzle_id")},
+				reading_type="mechanical",
+			)
 		),
 		"nozzle_choices": nozzle_choices,
 		"product_choices": product_choices,
@@ -1928,8 +2068,26 @@ def fuel_report_import(request, slug):
 		}
 		configured_tanks = {tank.pk: tank for tank in site.tanks.all()}
 		products = _site_fuel_products(list(configured_tanks.values()))
+		previous_electronic = _previous_daily_reading(
+			site, business_date, shift_label, "electronic-readings",
+		)
+		previous_electronic_values = {
+			item.nozzle_id: item.electronic_reading
+			for item in previous_electronic.nozzle_readings.all()
+			if item.electronic_reading is not None
+		} if previous_electronic else {}
+		previous_mechanical = _previous_daily_reading(
+			site, business_date, shift_label, "mechanical-readings",
+		)
+		previous_mechanical_values = {
+			item.nozzle_id: item.mechanical_reading
+			for item in previous_mechanical.nozzle_readings.all()
+			if item.mechanical_reading is not None
+		} if previous_mechanical else {}
 		selected_nozzle_rows = []
 		selected_nozzle_ids = set()
+		selected_mechanical_rows = []
+		selected_mechanical_ids = set()
 		selected_product_rows = []
 		selected_product_keys = set()
 		selected_tank_rows = []
@@ -1941,7 +2099,9 @@ def fuel_report_import(request, slug):
 		try:
 			for row in payload["nozzles"]:
 				nozzle_id = int(request.POST.get(f"nozzle_{row['number']}", ""))
-				opening = Decimal(row["opening"]).quantize(Decimal("0.01"))
+				opening = Decimal(str(previous_electronic_values.get(
+					nozzle_id, row["opening"],
+				))).quantize(Decimal("0.01"))
 				closing = Decimal(row["closing"]).quantize(Decimal("0.01"))
 				if nozzle_id not in configured_nozzles or nozzle_id in selected_nozzle_ids:
 					raise ValueError
@@ -1950,6 +2110,17 @@ def fuel_report_import(request, slug):
 				selected_nozzle_ids.add(nozzle_id)
 				selected_nozzles[row["number"]] = nozzle_id
 				selected_nozzle_rows.append((nozzle_id, opening, closing))
+
+			for row in payload.get("mechanical_nozzles", []):
+				nozzle_id = selected_nozzles.get(row["number"], row.get("selected_nozzle_id"))
+				if nozzle_id not in configured_nozzles or nozzle_id in selected_mechanical_ids:
+					raise ValueError
+				opening = Decimal(str(previous_mechanical_values.get(nozzle_id, row["opening"]))).quantize(Decimal("0.01"))
+				closing = Decimal(row["closing"]).quantize(Decimal("0.01"))
+				if opening < 0 or closing < opening or opening.adjusted() > 11 or closing.adjusted() > 11:
+					raise ValueError
+				selected_mechanical_ids.add(nozzle_id)
+				selected_mechanical_rows.append((nozzle_id, opening, closing))
 
 			for row in payload["fuel_sales"]:
 				product_key = row["mapping_key"]
@@ -1984,11 +2155,14 @@ def fuel_report_import(request, slug):
 				if value < 0 or value > Decimal("100000000"):
 					raise ValueError
 				selected_cash_up[key] = value
-			if payload["cash_up"].get("credit_card_total") is not None:
-				credit_card_total = Decimal(payload["cash_up"]["credit_card_total"]).quantize(Decimal("0.01"))
-				if credit_card_total < 0 or credit_card_total > Decimal("100000000"):
+			for key in ("shop_total", "cash_float", "credit_card_total", "voucher_1"):
+				raw_value = payload["cash_up"].get(key)
+				if raw_value is None:
+					continue
+				value = Decimal(str(request.POST.get(f"cash_up_{key}", raw_value))).quantize(Decimal("0.01"))
+				if value < 0 or value > Decimal("100000000"):
 					raise ValueError
-				selected_cash_up["credit_card_total"] = credit_card_total
+				selected_cash_up[key] = value
 		except (KeyError, TypeError, ValueError, ArithmeticError):
 			context.update(_report_review_context(
 				site,
@@ -2008,6 +2182,13 @@ def fuel_report_import(request, slug):
 			shift_label,
 			payload["nozzles"],
 			selected_nozzles,
+		) + _report_opening_mismatches(
+			site,
+			business_date,
+			shift_label,
+			payload.get("mechanical_nozzles", []),
+			selected_nozzles,
+			reading_type="mechanical",
 		)
 		if opening_mismatches and request.POST.get("opening_mismatch_confirmed") != "1":
 			context.update(_report_review_context(
@@ -2058,6 +2239,13 @@ def fuel_report_import(request, slug):
 				}
 				for nozzle_id, _, _ in selected_nozzle_rows
 				},
+				"mechanical_readings": {
+				str(nozzle_id): {
+					"opening_reading": str(existing[nozzle_id].mechanical_opening_reading) if existing.get(nozzle_id) and existing[nozzle_id].mechanical_opening_reading is not None else None,
+					"reading": str(existing[nozzle_id].mechanical_reading) if existing.get(nozzle_id) and existing[nozzle_id].mechanical_reading is not None else None,
+				}
+				for nozzle_id, _, _ in selected_mechanical_rows
+				},
 				"fuel_sales": dict(reading.fuel_sales),
 				"cash_up": {
 					"forecourt_total": cash_up_before.get("forecourt_total"),
@@ -2090,10 +2278,12 @@ def fuel_report_import(request, slug):
 					nozzle_reading.mechanical_reading = None
 				nozzle_reading.full_clean()
 				nozzle_reading.save()
+				existing[nozzle_id] = nozzle_reading
 			for issue in opening_mismatches:
 				alert, created_alert = FuelReadingSequenceAlert.objects.get_or_create(
 					daily_reading=reading,
 					nozzle_id=issue["nozzle_id"],
+					reading_type=issue["reading_type"],
 					defaults={
 						"site": site,
 						"previous_reading": issue["previous_reading"],
@@ -2118,22 +2308,35 @@ def fuel_report_import(request, slug):
 				tank_reading.dip_litres = closing
 				tank_reading.full_clean()
 				tank_reading.save()
+			for nozzle_id, opening, closing in selected_mechanical_rows:
+				nozzle_reading = existing.get(nozzle_id) or NozzleFuelReading(
+					daily_reading=reading,
+					nozzle_id=nozzle_id,
+				)
+				nozzle_reading.mechanical_opening_reading = opening
+				nozzle_reading.mechanical_reading = closing
+				nozzle_reading.full_clean()
+				nozzle_reading.save()
 			reading.fuel_sales = {product: str(litres) for product, litres in selected_product_rows}
 			reading.full_clean()
 			reading.save(update_fields=["fuel_sales", "updated_by", "updated_at"])
 			cash_up_values = dict(cash_up_before)
 			for key in list(cash_up_values):
-				if re.fullmatch(r"sales_account_\d+|payout_\d+", key):
+				if re.fullmatch(r"sales_account_\d+|payout_\d+|voucher_\d+", key):
 					cash_up_values.pop(key)
 			cash_up_values["forecourt_total"] = str(selected_cash_up["forecourt_total"])
 			cash_up_values["safedrops"] = str(selected_cash_up["safedrops"])
 			cash_up_values["sales_account_1"] = str(selected_cash_up["account_1"])
 			cash_up_values["payout_1"] = str(selected_cash_up["payout_1"])
+			for key in ("shop_total", "cash_float", "voucher_1"):
+				if key in selected_cash_up:
+					cash_up_values[key] = str(selected_cash_up[key])
 			if "credit_card_total" in selected_cash_up:
 				cash_up_values["pos_total_credit_card"] = str(selected_cash_up["credit_card_total"])
 			repeat_counts = dict(cash_up_values.get("repeat_counts", {}))
-			repeat_counts.update({"sales_account": 1, "payouts": 1})
+			repeat_counts.update({"sales_account": 1, "payouts": 1, "vouchers": 1})
 			cash_up_values["repeat_counts"] = repeat_counts
+			cash_up_values["totals"] = _cash_up_totals(cash_up_values)
 			if cash_up_record is None:
 				cash_up_record = CashUpShiftRecord(
 					site=site,
@@ -2146,17 +2349,38 @@ def fuel_report_import(request, slug):
 				cash_up_record.values = cash_up_values
 			cash_up_record.full_clean()
 			cash_up_record.save()
+			attachment_id = payload.get("attachment_id")
+			if attachment_id is not None:
+				attachment = get_object_or_404(
+					POSReportAttachment,
+					pk=attachment_id,
+					site=site,
+					business_date=business_date,
+				)
+				attachment.imported_at = timezone.now()
+				attachment.save(update_fields=["imported_at"])
 			after = {
 				"electronic_readings": {
 				str(nozzle_id): {"opening_reading": str(opening), "reading": str(closing)}
 				for nozzle_id, opening, closing in selected_nozzle_rows
 				},
+				"mechanical_readings": {
+				str(nozzle_id): {"opening_reading": str(opening), "reading": str(closing)}
+				for nozzle_id, opening, closing in selected_mechanical_rows
+				},
 				"fuel_sales": dict(reading.fuel_sales),
 				"cash_up": {
-					"forecourt_total": cash_up_values["forecourt_total"],
-					"safedrops": cash_up_values["safedrops"],
+					"total_sales": {
+						key: cash_up_values[key] for key in ("shop_total", "forecourt_total")
+						if key in cash_up_values
+					},
+					"cash": {
+						key: cash_up_values[key] for key in ("safedrops", "cash_float")
+						if key in cash_up_values
+					},
 					"sales_account_1": cash_up_values["sales_account_1"],
 					"payout_1": cash_up_values["payout_1"],
+					"voucher_1": cash_up_values.get("voucher_1"),
 					"pos_total_credit_card": cash_up_values.get("pos_total_credit_card"),
 				},
 				"tank_readings": {
@@ -2192,7 +2416,7 @@ def fuel_report_import(request, slug):
 				before=before,
 				after=after,
 			)
-		messages.success(request, "Imported electronic readings, fuel sales, tank readings, and mapped cash-up values from the report.")
+		messages.success(request, "Imported POS report readings, fuel sales, tank readings, and mapped cash-up values.")
 		return redirect(
 			f"{reverse('fuel-reading-entry', args=[site.slug, 'electronic-readings'])}"
 			f"?date={business_date.isoformat()}&shift={shift_label}"
@@ -2229,8 +2453,19 @@ def fuel_report_import(request, slug):
 		context["error"] = "The PDF report date does not match the business date selected on the dashboard."
 		return render(request, "ledger/fuel_report_import.html", context)
 
+	upload.seek(0)
+	attachment = POSReportAttachment(
+		site=site,
+		business_date=report["business_date"],
+		shift_label=shift_label,
+		uploaded_by=request.user,
+	)
+	attachment.full_clean()
+	attachment.save()
+	attachment.pdf.save(upload.name, upload, save=True)
 	serializable_report = {
 		"site_id": site.pk,
+		"attachment_id": attachment.pk,
 		"business_date": report["business_date"].isoformat(),
 		"period_from": report["period_from"].isoformat(sep=" "),
 		"period_to": report["period_to"].isoformat(sep=" "),
@@ -2245,6 +2480,13 @@ def fuel_report_import(request, slug):
 			{"grade": row["grade"], "litres": str(row["litres"])}
 			for row in report["fuel_sales"]
 		],
+		"mechanical_nozzles": [
+			{
+				**{key: str(value) if isinstance(value, Decimal) else value for key, value in row.items()},
+				"calculated_difference": str(row["closing"] - row["opening"]),
+			}
+			for row in report.get("mechanical_nozzles", [])
+		],
 		"tank_readings": [
 			{
 				"row": row["row"],
@@ -2255,7 +2497,10 @@ def fuel_report_import(request, slug):
 			}
 			for row in report["tank_readings"]
 		],
-		"cash_up": {key: str(value) for key, value in report["cash_up"].items()},
+		"cash_up": {
+			key: str(value) if value is not None else None
+			for key, value in report["cash_up"].items()
+		},
 		"warnings": report.get("warnings", []),
 	}
 	context.update(_report_review_context(site, serializable_report, shift_label))
@@ -2488,6 +2733,9 @@ def fuel_reading_entry(request, slug, reading_type):
 				if current_position + 1 < len(available_reading_types)
 				else None
 			)
+			requested_next_form = request.POST.get("next_form", "")
+			if requested_next_form not in available_reading_types or requested_next_form == reading_type:
+				requested_next_form = ""
 			return _fuel_workflow_redirect(
 				request,
 				site,
@@ -2496,8 +2744,8 @@ def fuel_reading_entry(request, slug, reading_type):
 				reading_type,
 				form_label,
 				request.POST.get("save_mode", "tab"),
-				next_reading_type,
-				stay_on_continue=True,
+				requested_next_form or next_reading_type,
+				stay_on_continue=not bool(requested_next_form),
 			)
 	if reading_type == "tank-reading":
 		field_rows = [
@@ -2554,6 +2802,7 @@ def fuel_reading_entry(request, slug, reading_type):
 			if _site_uses_fuel_reading(site, key)
 		],
 		"active_reading_type": reading_type,
+		"next_form": request.POST.get("next_form", "") if request.method == "POST" else "",
 	})
 
 

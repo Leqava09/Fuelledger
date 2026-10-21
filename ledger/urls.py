@@ -9,6 +9,7 @@ urlpatterns = [
 	path("logout/", LogoutView.as_view(), name="logout"),
 	path("", views.home, name="home"),
 	path("hq/", views.hq_dashboard, name="hq-dashboard"),
+	path("hq/sites/<slug:slug>/pos-clearance/", views.pos_clearance, name="pos-clearance"),
 	path("hq/airtime-alerts/<int:alert_id>/approve/", views.approve_airtime_sequence_alert, name="approve-airtime-alert"),
 	path("hq/card-machine-alerts/<int:alert_id>/approve/", views.approve_card_machine_batch_alert, name="approve-card-machine-alert"),
 	path("hq/fuel-reading-alerts/<int:alert_id>/approve/", views.approve_fuel_reading_sequence_alert, name="approve-fuel-reading-alert"),

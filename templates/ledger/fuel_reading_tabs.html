@@ -1,5 +1,5 @@
 <nav class="fuel-reading-tabs" role="tablist" aria-label="Fuel reading forms">
     {% for reading_form in fuel_reading_forms %}
-    <a class="fuel-reading-tab fuel-reading-tab--{{ reading_form.key }} button {% if active_reading_type == reading_form.key %}primary{% else %}secondary{% endif %}" role="tab" aria-selected="{% if active_reading_type == reading_form.key %}true{% else %}false{% endif %}" href="{% url 'fuel-reading-entry' site.slug reading_form.key %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ selected_shift|default:shift_label|urlencode }}">{{ reading_form.label }}</a>
+    <a class="fuel-reading-tab fuel-reading-tab--{{ reading_form.key }} button {% if active_reading_type == reading_form.key %}primary{% else %}secondary{% endif %}" role="tab" aria-selected="{% if active_reading_type == reading_form.key %}true{% else %}false{% endif %}" data-unsaved-return data-unsaved-next-form="{{ reading_form.key }}" href="{% url 'fuel-reading-entry' site.slug reading_form.key %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ selected_shift|default:shift_label|urlencode }}">{{ reading_form.label }}</a>
     {% endfor %}
 </nav>

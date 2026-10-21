@@ -21,6 +21,7 @@
     {% csrf_token %}
     {{ form.business_date }}{{ form.shift_label }}
     <input type="hidden" name="all_tab_values" value="">
+    <input type="hidden" name="next_section" value="{{ next_section }}">
     <input type="hidden" name="airtime_sequence_confirmed" value="">
     {% if form.non_field_errors %}<div class="form-error">{{ form.non_field_errors }}</div>{% endif %}
     {% if section == "summary" %}

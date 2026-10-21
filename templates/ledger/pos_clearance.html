@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}POS Clearance | {{ site.name }}{% endblock %}
+{% block content %}
+<div class="page-heading compact-heading">
+    <div>
+        <div class="eyebrow"><a href="{% url 'hq-dashboard' %}">Head Office</a> / {{ site.name }}</div>
+        <h1>POS Clearance</h1>
+        <p class="subheading">Remove stored POS PDFs without deleting imported readings or cash-up data.</p>
+    </div>
+    <div class="heading-actions"><a class="button secondary" href="{% url 'hq-dashboard' %}">Back to HQ</a></div>
+</div>
+<p>{{ attachment_count }} PDF attachment{{ attachment_count|pluralize }} currently stored.</p>
+<section class="form-section">
+    <div class="form-section-title"><span>Clear selected PDF files</span></div>
+    <form method="post" class="entry-form">
+        {% csrf_token %}
+        <div class="form-row">
+            <label for="keep-days">Keep the most recent PDFs</label>
+            <select id="keep-days" name="keep_days">
+                {% for days in retention_days %}<option value="{{ days }}" {% if days == 30 %}selected{% endif %}>Keep last {{ days }} days</option>{% endfor %}
+            </select>
+        </div>
+        <div class="form-row checkbox-row">
+            <label><input type="checkbox" name="confirm" required> Confirm removal of PDFs older than the selected retention period.</label>
+        </div>
+        <button class="button primary" type="submit" name="action" value="keep_days">Apply retention period</button>
+    </form>
+</section>
+<section class="form-section">
+    <div class="form-section-title"><span>Clear PDFs for one report date</span></div>
+    {% if report_dates %}
+    <form method="post" class="entry-form">
+        {% csrf_token %}
+        <div class="form-row">
+            <label for="business-date">Report date</label>
+            <select id="business-date" name="business_date" required>
+                {% for item in report_dates %}<option value="{{ item.business_date|date:'Y-m-d' }}">{{ item.business_date|date:"d M Y" }} ({{ item.pdf_count }} PDF{{ item.pdf_count|pluralize }})</option>{% endfor %}
+            </select>
+        </div>
+        <div class="form-row checkbox-row">
+            <label><input type="checkbox" name="confirm" required> Confirm removal of PDFs for this report date.</label>
+        </div>
+        <button class="button secondary" type="submit" name="action" value="clear_date">Clear selected date</button>
+    </form>
+    {% else %}<p class="empty-state">No POS PDFs are stored for this site.</p>{% endif %}
+</section>
+<section class="form-section">
+    <div class="form-section-title"><span>Clear all POS PDFs</span></div>
+    <form method="post" class="entry-form">
+        {% csrf_token %}
+        <div class="form-row checkbox-row">
+            <label><input type="checkbox" name="confirm" required> Confirm removal of every stored POS PDF for {{ site.name }}. Imported data will remain.</label>
+        </div>
+        <button class="button danger" type="submit" name="action" value="clear_all">Clear all PDFs</button>
+    </form>
+</section>
+<section class="form-section">
+    <div class="form-section-title"><span>Stored POS PDFs</span></div>
+    {% if attachments %}
+    <div class="reading-table-wrap">
+        <table class="reading-table">
+            <thead><tr><th>Report date</th><th>Shift</th><th>Uploaded</th><th>Import status</th></tr></thead>
+            <tbody>
+                {% for attachment in attachments %}
+                <tr>
+                    <td>{{ attachment.business_date|date:"d M Y" }}</td>
+                    <td>{{ attachment.shift_label }}</td>
+                    <td>{{ attachment.uploaded_at|date:"d M Y H:i" }}</td>
+                    <td>{% if attachment.imported_at %}Imported{% else %}Uploaded, not confirmed{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if attachment_count > 100 %}<p class="subheading">Showing the 100 most recent PDFs.</p>{% endif %}
+    {% else %}<p class="empty-state">No PDF files are currently stored.</p>{% endif %}
+</section>
+{% endblock %}

@@ -17,6 +17,7 @@
 <form id="fuel-reading-form" class="entry-form" method="post" data-workflow-draft-key="{{ reading_type }}" data-workflow-draft-scope="{{ request.user.pk }}:{{ site.pk }}:{{ selected_date|date:'Y-m-d' }}:{{ shift_label }}" data-has-errors="{% if form.errors %}true{% else %}false{% endif %}">
     {% csrf_token %}
     {{ form.business_date }}{{ form.shift_label }}
+    <input type="hidden" name="next_form" value="{{ next_form }}">
     {% if form.non_field_errors %}<div class="form-error">{{ form.non_field_errors }}</div>{% endif %}
     {% if field_rows %}
         {% if is_tank_reading %}

@@ -46,8 +46,16 @@ POS_FUEL_ROW_PATTERN = re.compile(
 	rf"^[ \t]*Fuel sales:\s*({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s*$",
 	re.MULTILINE | re.IGNORECASE,
 )
+POS_DRY_ROW_PATTERN = re.compile(
+	rf"^[ \t]*Dry sales:\s*({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s*$",
+	re.MULTILINE | re.IGNORECASE,
+)
 TOTAL_CREDIT_CARD_PATTERN = re.compile(
 	rf"Total\s+Credit\s+Card\s*:?\s*({NUMBER})",
+	re.IGNORECASE,
+)
+POS_NOZZLE_SECTION_PATTERN = re.compile(
+	r"Sales Report from Pumps \((?:Mechanical|Machinical) totalizer movement by nozzle\)",
 	re.IGNORECASE,
 )
 
@@ -106,12 +114,19 @@ def parse_report(text):
 	if not pos_fuel_match:
 		raise ReportParseError("POS fuel sales value was not found.")
 	pos_fuel_value_exvat = _decimal(pos_fuel_match.group(2))
+	pos_dry_match = POS_DRY_ROW_PATTERN.search(text[transactions_start:transactions_end])
+	pos_shop_value_incl_vat = _decimal(pos_dry_match.group(4)) if pos_dry_match else None
 
 	section_start = text.find("Electronic totalizer movement")
 	if section_start < 0:
 		raise ReportParseError("Electronic totalizer movement section not found.")
-	section_end = text.find("Sales Report: calculated", section_start)
-	section = text[section_start:] if section_end < 0 else text[section_start:section_end]
+	section_end_match = re.search(
+		r"Sales Report from Pumps \((?:Mechanical|Machinical) totalizer movement by nozzle\)"
+		r"|Sales Report: calculated",
+		text[section_start:],
+		re.IGNORECASE,
+	)
+	section = text[section_start:section_start + section_end_match.start()] if section_end_match else text[section_start:]
 	nozzle_candidates = NOZZLE_ROW_CANDIDATE_PATTERN.findall(section)
 	nozzles = [
 		{
@@ -172,6 +187,8 @@ def parse_report(text):
 	payout_matches = re.findall(rf"Total Payouts:\s*({NUMBER})", payment_section, re.IGNORECASE)
 	money_drops_match = re.search(rf"Money Drops for Period:\s*({NUMBER})", payment_section, re.IGNORECASE)
 	credit_card_match = TOTAL_CREDIT_CARD_PATTERN.search(payment_section)
+	float_match = re.search(rf"Total Left in Drawer:\s*({NUMBER})", payment_section, re.IGNORECASE)
+	cheque_match = re.search(rf"Total\s*Cheque:\s*({NUMBER})", payment_section, re.IGNORECASE)
 	if not account_matches or not payout_matches or not money_drops_match:
 		raise ReportParseError("Required cash-up totals were not found in the payment summary.")
 	cash_up = {
@@ -179,8 +196,36 @@ def parse_report(text):
 		"safedrops": _decimal(money_drops_match.group(1)),
 		"account_1": _decimal(account_matches[0]),
 		"payout_1": _decimal(payout_matches[0]),
+		"shop_total": pos_shop_value_incl_vat,
+		"cash_float": _decimal(float_match.group(1)) if float_match else None,
 		"credit_card_total": _decimal(credit_card_match.group(1)) if credit_card_match else None,
+		"voucher_1": _decimal(cheque_match.group(1)) if cheque_match else None,
 	}
+	mechanical_nozzles = []
+	mechanical_section_match = POS_NOZZLE_SECTION_PATTERN.search(text)
+	if mechanical_section_match:
+		mechanical_start = mechanical_section_match.end()
+		mechanical_end_match = re.search(r"Sales Report(?::| from Pumps)", text[mechanical_start:], re.IGNORECASE)
+		mechanical_section = text[
+			mechanical_start:mechanical_start + mechanical_end_match.start()
+		] if mechanical_end_match else text[mechanical_start:]
+		mechanical_candidates = NOZZLE_ROW_CANDIDATE_PATTERN.findall(mechanical_section)
+		mechanical_nozzles = [
+			{
+				"number": int(match.group(1)),
+				"grade": match.group(2),
+				"opening": _decimal(match.group(3)),
+				"closing": _decimal(match.group(4)),
+				"totalizer_litres": _decimal(match.group(5)),
+				"sales_litres": _decimal(match.group(6)),
+				"variance": _decimal(match.group(7)),
+			}
+			for match in NOZZLE_PATTERN.finditer(mechanical_section)
+		]
+		if len(mechanical_candidates) != len(mechanical_nozzles):
+			raise ReportParseError("Some numbered mechanical nozzle rows could not be read.")
+		if len({row["number"] for row in mechanical_nozzles}) != len(mechanical_nozzles):
+			raise ReportParseError("The report contains duplicate mechanical nozzle numbers.")
 
 	opening_start = text.find("Opening Values")
 	closing_start = text.find("Closing Values", opening_start)
@@ -244,6 +289,7 @@ def parse_report(text):
 		"period_to": period_to,
 		"business_date": period_from.date(),
 		"nozzles": nozzles,
+		"mechanical_nozzles": mechanical_nozzles,
 		"fuel_sales": fuel_sales,
 		"tank_readings": tank_readings,
 		"cash_up": cash_up,

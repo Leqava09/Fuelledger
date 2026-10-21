@@ -1,5 +1,5 @@
 <nav class="fuel-reading-tabs" role="tablist" aria-label="Cash up sections">
     {% for tab in cash_up_tabs %}
-    <a class="fuel-reading-tab button {% if active_cash_up_section == tab.key %}primary{% else %}secondary{% endif %}" role="tab" aria-selected="{% if active_cash_up_section == tab.key %}true{% else %}false{% endif %}" href="{% url 'cash-up-entry' site.slug tab.key %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ shift_label|urlencode }}">{{ tab.label }}</a>
+    <a class="fuel-reading-tab button {% if active_cash_up_section == tab.key %}primary{% else %}secondary{% endif %}" role="tab" aria-selected="{% if active_cash_up_section == tab.key %}true{% else %}false{% endif %}" data-unsaved-return data-cash-up-section="{{ tab.key }}" href="{% url 'cash-up-entry' site.slug tab.key %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ shift_label|urlencode }}">{{ tab.label }}</a>
     {% endfor %}
 </nav>

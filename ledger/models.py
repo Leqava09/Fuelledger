@@ -5,6 +5,7 @@ from django.db import models
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 from django.utils.text import slugify
+from uuid import uuid4
 
 
 SHIFT_LABEL_MAX_LENGTH = 60
@@ -377,6 +378,33 @@ class CashUpShiftRecord(models.Model):
 		return f"{self.site} / {self.business_date} / {self.shift_label}"
 
 
+def pos_report_upload_path(instance, filename):
+	return f"pos_reports/{instance.site_id}/{instance.business_date.isoformat()}/{uuid4().hex}.pdf"
+
+
+class POSReportAttachment(models.Model):
+	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="pos_report_attachments")
+	business_date = models.DateField()
+	shift_label = models.CharField(max_length=SHIFT_LABEL_MAX_LENGTH)
+	pdf = models.FileField(upload_to=pos_report_upload_path, blank=True)
+	uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="pos_reports_uploaded")
+	uploaded_at = models.DateTimeField(auto_now_add=True)
+	imported_at = models.DateTimeField(null=True, blank=True)
+
+	class Meta:
+		ordering = ["-uploaded_at"]
+		indexes = [
+			models.Index(fields=["site", "business_date"], name="pos_report_site_date_idx"),
+		]
+
+	def clean(self):
+		if self.site_id and self.shift_label not in self.site.get_shift_names():
+			raise ValidationError({"shift_label": "Select a shift configured for this site."})
+
+	def __str__(self):
+		return f"{self.site} / {self.business_date} / {self.shift_label}"
+
+
 class AirtimeSequenceAlert(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="airtime_sequence_alerts")
 	cash_up_record = models.ForeignKey(CashUpShiftRecord, on_delete=models.CASCADE, related_name="airtime_sequence_alerts")
@@ -436,9 +464,15 @@ class CardMachineBatchSequenceAlert(models.Model):
 
 
 class FuelReadingSequenceAlert(models.Model):
+	READING_TYPE_CHOICES = [
+		("electronic", "Electronic"),
+		("mechanical", "Mechanical"),
+	]
+
 	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="fuel_reading_sequence_alerts")
 	daily_reading = models.ForeignKey("DailyFuelReading", on_delete=models.CASCADE, related_name="sequence_alerts")
 	nozzle = models.ForeignKey(Nozzle, on_delete=models.PROTECT, related_name="sequence_alerts")
+	reading_type = models.CharField(max_length=16, choices=READING_TYPE_CHOICES, default="electronic")
 	previous_reading = models.DecimalField(max_digits=14, decimal_places=2)
 	entered_opening = models.DecimalField(max_digits=14, decimal_places=2)
 	flagged_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="fuel_reading_alerts_flagged")
@@ -456,7 +490,10 @@ class FuelReadingSequenceAlert(models.Model):
 	class Meta:
 		ordering = ["-created_at"]
 		constraints = [
-			models.UniqueConstraint(fields=["daily_reading", "nozzle"], name="unique_fuel_reading_alert_per_nozzle"),
+			models.UniqueConstraint(
+				fields=["daily_reading", "nozzle", "reading_type"],
+				name="unique_fuel_reading_alert_type",
+			),
 		]
 
 	def __str__(self):

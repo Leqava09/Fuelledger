@@ -38,7 +38,7 @@
                         <p>Flagged by {{ alert.flagged_by.get_full_name|default:alert.flagged_by.username }}</p>
                         <form method="post" action="{% url 'approve-card-machine-alert' alert.pk %}">{% csrf_token %}<button class="button secondary" type="submit">Approve / Clear</button></form>
                         {% else %}
-                        <h3>Fuel reading opening mismatch</h3>
+                        <h3>{{ alert.get_reading_type_display }} reading opening mismatch</h3>
                         <p>{{ alert.daily_reading.business_date|date:"d M Y" }} / {{ alert.daily_reading.shift_label }} / Nozzle {{ alert.nozzle.name }}</p>
                         <dl><div><dt>Previous closing</dt><dd>{{ alert.previous_reading }}</dd></div><div><dt>Imported opening</dt><dd>{{ alert.entered_opening }}</dd></div></dl>
                         <p>Flagged by {{ alert.flagged_by.get_full_name|default:alert.flagged_by.username }}</p>
@@ -72,6 +72,7 @@
                 <div class="hq-site-actions">
                     <a class="button primary" href="{% url 'site-dashboard' site.slug %}">Open site</a>
                     <a class="button secondary" href="{% url 'admin:ledger_site_change' site.pk %}">Edit</a>
+                    <a class="button secondary" href="{% url 'pos-clearance' site.slug %}">POS Clearance ({{ site.pos_pdf_count }})</a>
                 </div>
             </div>
         </article>

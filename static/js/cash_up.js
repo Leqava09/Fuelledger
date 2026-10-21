@@ -5,7 +5,7 @@ let tabDrafts = {};
 
 if (draftScope) {
 	try {
-		tabDrafts = JSON.parse(localStorage.getItem(`fuelledger-cashup:${draftScope}`) || "{}");
+		tabDrafts = JSON.parse(sessionStorage.getItem(`fuelledger-cashup:${draftScope}`) || "{}");
 	} catch {
 		tabDrafts = {};
 	}
@@ -15,7 +15,7 @@ if (draftScope) {
 	else if (savedMarker) delete tabDrafts[savedMarker];
 	if (savedSection) delete tabDrafts[savedSection];
 	try {
-		localStorage.setItem(`fuelledger-cashup:${draftScope}`, JSON.stringify(tabDrafts));
+		sessionStorage.setItem(`fuelledger-cashup:${draftScope}`, JSON.stringify(tabDrafts));
 	} catch {
 		tabDrafts = {};
 	}
@@ -67,7 +67,7 @@ if (cashUpForm) {
 			const slip = row.querySelector('input[name^="airtime_slip"]');
 			const system = row.querySelector('input[name^="airtime_system"]');
 			if (difference && slip && system) {
-				difference.textContent = ((Number.parseFloat(system.value) || 0) - (Number.parseFloat(slip.value) || 0)).toFixed(2);
+				difference.textContent = ((Number.parseFloat(slip.value) || 0) - (Number.parseFloat(system.value) || 0)).toFixed(2);
 			}
 		});
 	};
@@ -110,7 +110,7 @@ if (cashUpForm) {
 		});
 		tabDrafts[sectionKey] = values;
 		try {
-			localStorage.setItem(`fuelledger-cashup:${draftScope}`, JSON.stringify(tabDrafts));
+			sessionStorage.setItem(`fuelledger-cashup:${draftScope}`, JSON.stringify(tabDrafts));
 		} catch {
 			return;
 		}
