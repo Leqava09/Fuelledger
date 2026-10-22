@@ -145,7 +145,11 @@
             <h3>Card Machines</h3>
             <table class="reading-table">
                 <thead><tr><th>POS value</th><th>Cash-up field</th><th>Amount</th></tr></thead>
-                <tbody><tr><td>Total Credit Card</td><td>Total From POS</td><td>{% if report.cash_up.credit_card_total != None %}{{ report.cash_up.credit_card_total|floatformat:2 }}{% else %}Not found in report{% endif %}</td></tr></tbody>
+                <tbody>
+                    <tr><td>Total Fleet Card</td><td>Total Fleet Card</td><td><input type="number" name="cash_up_fleet_card_total" value="{{ report.cash_up.fleet_card_total|default:'0.00' }}" min="0" max="100000000" step="0.01"></td></tr>
+                    <tr><td>Total Debit Card</td><td>Total Debit Card</td><td><input type="number" name="cash_up_debit_card_total" value="{{ report.cash_up.debit_card_total|default:'0.00' }}" min="0" max="100000000" step="0.01"></td></tr>
+                    <tr><td>Total Credit Card</td><td>Credit Card portion of Total From POS</td><td>{% if report.cash_up.credit_card_total != None %}{{ report.cash_up.credit_card_total|floatformat:2 }}{% else %}Not found in report{% endif %}</td></tr>
+                </tbody>
             </table>
         </div>
         <div class="reading-table-wrap">

@@ -95,7 +95,8 @@
     {% else %}
     <section class="form-section">
         <div class="form-section-title"><span>{{ section_label }}</span></div>
-        {% if section == "manual-shop" and card_machine_rows %}
+        {% if section == "manual-shop" %}
+        {% if card_machine_rows %}
         <div class="cash-up-fields cash-up-fields--stacked">
             {% for row in card_machine_rows %}
             <div class="card-machine-entry">
@@ -104,18 +105,28 @@
             </div>
             {% endfor %}
         </div>
+        {% else %}
+        <p class="empty-state">No card machines are configured for this site.</p>
+        {% endif %}
         {% elif field_rows %}
         <div class="cash-up-fields cash-up-fields--stacked">
             {% for key, label, field in field_rows %}
             <div class="form-row">{{ field.label_tag }}{% if key|slice:":13" == "manual_batch_" %}{{ field }}{% else %}<div class="currency-input-line">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ field }}</div>{% endif %}{{ field.errors }}</div>
             {% endfor %}
         </div>
-        {% elif section == "manual-shop" %}
-        <p class="empty-state">No card machines are configured for this site.</p>
         {% elif section == "fuel" %}
         <p class="empty-state">No totals are configured for this site.</p>
         {% else %}
         <p class="empty-state">No additional cash-up entries are configured for this site.</p>
+        {% endif %}
+        {% if section == "manual-shop" %}
+        <div class="cash-up-fields cash-up-fields--stacked">
+            {% for key, label, field in field_rows %}
+            {% if key == "fleet_card_total" or key == "debit_card_total" %}
+            <div class="form-row">{{ field.label_tag }}<div class="currency-input-line">{% if site.currency %}<span class="currency-prefix">{{ site.currency }}</span>{% endif %}{{ field }}</div>{{ field.errors }}</div>
+            {% endif %}
+            {% endfor %}
+        </div>
         {% endif %}
         {% if show_total %}
         {% if section == "fuel" %}

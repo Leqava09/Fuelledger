@@ -27,6 +27,8 @@ ULP93                                  175.360              4700.00             
 Totals:           801.940             24469.60                    .00               123.00
 Payment and Bankable cash analysis summary
 Total Account:                2162.20                    Total Cash:                 29564.84              Money Drops:                25130.00
+Total Fleet Card: .00
+Total Debit Card: .00
 Total Credit Card:             18250.35
 TotalCheque: 60.50
 Total Payouts:                 2142.45
@@ -65,6 +67,8 @@ ULP93                    1235.25 @ 2026-10-06 04:55:00         64.75            
 		self.assertEqual(parsed["cash_up"]["account_1"], Decimal("2162.20"))
 		self.assertEqual(parsed["cash_up"]["payout_1"], Decimal("2142.45"))
 		self.assertEqual(parsed["cash_up"]["credit_card_total"], Decimal("18250.35"))
+		self.assertEqual(parsed["cash_up"]["fleet_card_total"], Decimal("0.00"))
+		self.assertEqual(parsed["cash_up"]["debit_card_total"], Decimal("0.00"))
 		self.assertEqual(parsed["cash_up"]["shop_total"], Decimal("11652.34"))
 		self.assertEqual(parsed["cash_up"]["cash_float"], Decimal("2292.39"))
 		self.assertEqual(parsed["cash_up"]["voucher_1"], Decimal("60.50"))
@@ -97,6 +101,14 @@ ULP93                    1235.25 @ 2026-10-06 04:55:00         64.75            
 		parsed = parse_report(text)
 
 		self.assertIsNone(parsed["cash_up"]["credit_card_total"])
+
+	def test_fleet_and_debit_card_totals_are_optional(self):
+		text = self.REPORT_TEXT.replace("Total Fleet Card: .00\n", "").replace("Total Debit Card: .00\n", "")
+
+		parsed = parse_report(text)
+
+		self.assertIsNone(parsed["cash_up"]["fleet_card_total"])
+		self.assertIsNone(parsed["cash_up"]["debit_card_total"])
 
 	def test_mechanical_readings_are_optional(self):
 		text = self.REPORT_TEXT.replace(

@@ -54,6 +54,14 @@ TOTAL_CREDIT_CARD_PATTERN = re.compile(
 	rf"Total\s+Credit\s+Card\s*:?\s*({NUMBER})",
 	re.IGNORECASE,
 )
+TOTAL_FLEET_CARD_PATTERN = re.compile(
+	rf"Total\s+Fleet\s+Card\s*:?\s*({NUMBER})",
+	re.IGNORECASE,
+)
+TOTAL_DEBIT_CARD_PATTERN = re.compile(
+	rf"Total\s+Debit\s+Card\s*:?\s*({NUMBER})",
+	re.IGNORECASE,
+)
 POS_NOZZLE_SECTION_PATTERN = re.compile(
 	r"Sales Report from Pumps \((?:Mechanical|Machinical) totalizer movement by nozzle\)",
 	re.IGNORECASE,
@@ -187,6 +195,8 @@ def parse_report(text):
 	payout_matches = re.findall(rf"Total Payouts:\s*({NUMBER})", payment_section, re.IGNORECASE)
 	money_drops_match = re.search(rf"Money Drops for Period:\s*({NUMBER})", payment_section, re.IGNORECASE)
 	credit_card_match = TOTAL_CREDIT_CARD_PATTERN.search(payment_section)
+	fleet_card_match = TOTAL_FLEET_CARD_PATTERN.search(payment_section)
+	debit_card_match = TOTAL_DEBIT_CARD_PATTERN.search(payment_section)
 	float_match = re.search(rf"Total Left in Drawer:\s*({NUMBER})", payment_section, re.IGNORECASE)
 	cheque_match = re.search(rf"Total\s*Cheque:\s*({NUMBER})", payment_section, re.IGNORECASE)
 	if not account_matches or not payout_matches or not money_drops_match:
@@ -199,6 +209,8 @@ def parse_report(text):
 		"shop_total": pos_shop_value_incl_vat,
 		"cash_float": _decimal(float_match.group(1)) if float_match else None,
 		"credit_card_total": _decimal(credit_card_match.group(1)) if credit_card_match else None,
+		"fleet_card_total": _decimal(fleet_card_match.group(1)) if fleet_card_match else None,
+		"debit_card_total": _decimal(debit_card_match.group(1)) if debit_card_match else None,
 		"voucher_1": _decimal(cheque_match.group(1)) if cheque_match else None,
 	}
 	mechanical_nozzles = []

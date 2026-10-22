@@ -1268,6 +1268,8 @@ class DailyFuelReadingWorkflowTests(TestCase):
                 "shop_total": Decimal("11652.34"),
                 "cash_float": Decimal("2292.39"),
                 "credit_card_total": Decimal("18250.35"),
+                "fleet_card_total": Decimal("20.00"),
+                "debit_card_total": Decimal("30.00"),
                 "voucher_1": Decimal("60.50"),
             },
             "fuel_sales": [
@@ -1319,6 +1321,8 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertContains(preview, "full-day report")
         self.assertContains(preview, "Pump fuel sales do not match")
         self.assertContains(preview, "18250.35")
+        self.assertContains(preview, "Total Fleet Card")
+        self.assertContains(preview, "Total Debit Card")
         self.assertContains(preview, "Mechanical Readings")
         self.assertEqual(preview.context["report"]["nozzles"][0]["review_opening"], "7040.00")
         self.assertFalse(preview.context["overwrite_existing"])
@@ -1346,6 +1350,8 @@ class DailyFuelReadingWorkflowTests(TestCase):
             "cash_up_account_1": "2162.20",
             "cash_up_payout_1": "2142.45",
             "cash_up_voucher_1": "60.50",
+            "cash_up_fleet_card_total": "20.00",
+            "cash_up_debit_card_total": "30.00",
             "remember_mappings": "on",
         })
 
@@ -1375,10 +1381,17 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertEqual(cash_up.values["cash_float"], "2292.39")
         self.assertEqual(cash_up.values["voucher_1"], "60.50")
         self.assertEqual(cash_up.values["pos_total_credit_card"], "18250.35")
+        self.assertEqual(cash_up.values["fleet_card_total"], "20.00")
+        self.assertEqual(cash_up.values["debit_card_total"], "30.00")
         self.assertEqual(cash_up.values["totals"]["fuel"], "131625.44")
         self.assertEqual(cash_up.values["totals"]["cash"], "27422.39")
         self.assertEqual(cash_up.values["totals"]["vouchers"], "60.50")
-        self.assertEqual(cash_up.values["totals"]["manual_shop"], "0")
+        self.assertEqual(cash_up.values["totals"]["manual_shop"], "50.00")
+        card_machines = self.client.get(
+            reverse("cash-up-entry", args=[self.site.slug, "manual-shop"]),
+            {"date": "2026-10-06", "shift": "Night"},
+        )
+        self.assertContains(card_machines, 'data-pos-card-total="18300.35">18300.35')
         attachment = POSReportAttachment.objects.get(site=self.site, business_date=date(2026, 10, 6))
         self.assertTrue(attachment.pdf)
         self.assertIsNotNone(attachment.imported_at)
@@ -3057,7 +3070,9 @@ class CashUpWorkflowTests(TestCase):
         self.assertContains(manual_page, f'name="manual_batch_{manual_point.pk}"')
         self.assertContains(manual_page, 'class="card-machine-entry"')
         self.assertContains(manual_page, "Total From POS")
-        self.assertEqual(manual_page.content.decode().count('class="currency-prefix">ZAR</span>'), 4)
+        self.assertContains(manual_page, 'name="fleet_card_total" value="0.00"')
+        self.assertContains(manual_page, 'name="debit_card_total" value="0.00"')
+        self.assertEqual(manual_page.content.decode().count('class="currency-prefix">ZAR</span>'), 6)
         self.assertEqual(self.client.post(
             f"{self.cash_up_url('manual-shop')}?date={self.business_date.isoformat()}&shift=Night",
             {
@@ -3065,6 +3080,8 @@ class CashUpWorkflowTests(TestCase):
                 "shift_label": "Night",
                 f"manual_{manual_point.pk}": "55.25",
                 f"manual_batch_{manual_point.pk}": "B-100",
+                "fleet_card_total": "12.00",
+                "debit_card_total": "8.00",
             },
         ).status_code, 302)
         self.assertEqual(self.client.post(
@@ -3078,11 +3095,14 @@ class CashUpWorkflowTests(TestCase):
         record = CashUpShiftRecord.objects.get(site=self.site, business_date=self.business_date, shift_label="Night")
         self.assertEqual(record.values[f"manual_{manual_point.pk}"], "55.25")
         self.assertEqual(record.values[f"manual_batch_{manual_point.pk}"], "B-100")
+        self.assertEqual(record.values["fleet_card_total"], "12.00")
+        self.assertEqual(record.values["debit_card_total"], "8.00")
         self.assertEqual(record.values[f"additional_{additional.pk}"], "3.75")
         record.values["pos_total_credit_card"] = "50.00"
         record.save(update_fields=["values"])
         manual_page = self.client.get(self.cash_up_url("manual-shop"), self.cash_up_query())
-        self.assertContains(manual_page, 'data-pos-card-total="50.00">50.00')
+        self.assertContains(manual_page, 'data-pos-card-total="70.00">70.00')
+        self.assertContains(manual_page, '>75.25</strong>')
         self.assertContains(manual_page, ">5.25</strong>")
 
     def test_cash_up_section_tabs_are_unsaved_change_targets(self):

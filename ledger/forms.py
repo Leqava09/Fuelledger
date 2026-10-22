@@ -196,13 +196,22 @@ class CashUpEntryForm(forms.Form):
 		elif section == "manual-shop":
 			for point in ManualShopPoint.objects.filter(site=site):
 				key = f"manual_{point.pk}"
-				self._add_money_field(key, f"Card Machine {point.serial_number}", initial_values)
+				self._add_money_field(
+					key,
+					f"Card Machine {point.serial_number}",
+					{**initial_values, key: initial_values.get(key) or "0.00"},
+				)
 				self._add_text_field(
 					f"manual_batch_{point.pk}",
 					f"Batch Number {point.serial_number}",
 					initial_values,
 					max_length=30,
 				)
+			for key, label in (
+				("fleet_card_total", "Total Fleet Card"),
+				("debit_card_total", "Total Debit Card"),
+			):
+				self._add_money_field(key, label, {**initial_values, key: initial_values.get(key) or "0.00"})
 		elif section == "cash-up-additional":
 			for additional in CashUpAdditional.objects.filter(site=site):
 				key = f"additional_{additional.pk}"

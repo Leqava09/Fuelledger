@@ -1204,7 +1204,11 @@ def _cash_up_entry(request, selected_date, shift_label, section):
 		"cash-up-additional": summary["additional_total"],
 	}
 	try:
-		pos_total_credit_card = Decimal(str(initial_values["pos_total_credit_card"]))
+		pos_total_credit_card = (
+			Decimal(str(initial_values["pos_total_credit_card"]))
+			+ Decimal(str(initial_values.get("fleet_card_total") or 0))
+			+ Decimal(str(initial_values.get("debit_card_total") or 0))
+		)
 	except (KeyError, TypeError, ValueError, ArithmeticError):
 		pos_total_credit_card = None
 	card_machine_rows = [
@@ -1692,6 +1696,13 @@ def _cash_up_totals(values):
 	legacy_fuel_total = _fuel_total(values, sum_group)
 	forecourt_total = Decimal(str(values.get("forecourt_total") or 0))
 	shop_total = Decimal(str(values.get("shop_total") or 0))
+	manual_shop_total = sum(
+		Decimal(str(value or 0))
+		for key, value in values.items()
+		if key.startswith("manual_") and key[len("manual_"):].isdigit()
+	)
+	manual_shop_total += Decimal(str(values.get("fleet_card_total") or 0))
+	manual_shop_total += Decimal(str(values.get("debit_card_total") or 0))
 	fuel_total = legacy_fuel_total
 	if any(key in values for key in ("forecourt_total", "shop_total")):
 		fuel_total = forecourt_total + shop_total
@@ -1705,11 +1716,7 @@ def _cash_up_totals(values):
 		"payouts": str(sum_group("payout_", "payout")),
 		"airtime_slip": str(sum_group("airtime_slip_", "airtime_slip")),
 		"airtime_loaded": str(Decimal(str(values.get("airtime_loaded") or 0))),
-		"manual_shop": str(sum(
-			Decimal(str(value or 0))
-			for key, value in values.items()
-			if key.startswith("manual_") and key[len("manual_"):].isdigit()
-		)),
+		"manual_shop": str(manual_shop_total),
 		"cash_up_additional": str(sum(Decimal(str(value or 0)) for key, value in values.items() if key.startswith("additional_"))),
 	}
 
@@ -1973,7 +1980,7 @@ def _report_review_context(site, report, shift_label, selected_nozzles=None, sel
 		for key, value in cash_up_record.values.items()
 		if key in {
 			"forecourt_total", "shop_total", "safedrops", "cash_float",
-			"pos_total_credit_card", "voucher_1",
+			"pos_total_credit_card", "fleet_card_total", "debit_card_total", "voucher_1",
 		}
 		or re.fullmatch(r"sales_account_\d+|payout_\d+|voucher_\d+", key)
 	))
@@ -2155,6 +2162,15 @@ def fuel_report_import(request, slug):
 				if value < 0 or value > Decimal("100000000"):
 					raise ValueError
 				selected_cash_up[key] = value
+			for key in ("fleet_card_total", "debit_card_total"):
+				raw_value = payload["cash_up"].get(key)
+				submitted_value = request.POST.get(f"cash_up_{key}")
+				if raw_value is None and submitted_value in (None, ""):
+					continue
+				value = Decimal(str(submitted_value if submitted_value not in (None, "") else raw_value)).quantize(Decimal("0.01"))
+				if value < 0 or value > Decimal("100000000"):
+					raise ValueError
+				selected_cash_up[key] = value
 			for key in ("shop_total", "cash_float", "credit_card_total", "voucher_1"):
 				raw_value = payload["cash_up"].get(key)
 				if raw_value is None:
@@ -2251,6 +2267,8 @@ def fuel_report_import(request, slug):
 					"forecourt_total": cash_up_before.get("forecourt_total"),
 					"safedrops": cash_up_before.get("safedrops"),
 					"pos_total_credit_card": cash_up_before.get("pos_total_credit_card"),
+					"fleet_card_total": cash_up_before.get("fleet_card_total"),
+					"debit_card_total": cash_up_before.get("debit_card_total"),
 					"sales_accounts": {
 						key: value for key, value in cash_up_before.items()
 						if re.fullmatch(r"sales_account_\d+", key)
@@ -2328,7 +2346,7 @@ def fuel_report_import(request, slug):
 			cash_up_values["safedrops"] = str(selected_cash_up["safedrops"])
 			cash_up_values["sales_account_1"] = str(selected_cash_up["account_1"])
 			cash_up_values["payout_1"] = str(selected_cash_up["payout_1"])
-			for key in ("shop_total", "cash_float", "voucher_1"):
+			for key in ("shop_total", "cash_float", "voucher_1", "fleet_card_total", "debit_card_total"):
 				if key in selected_cash_up:
 					cash_up_values[key] = str(selected_cash_up[key])
 			if "credit_card_total" in selected_cash_up:
@@ -2382,6 +2400,8 @@ def fuel_report_import(request, slug):
 					"payout_1": cash_up_values["payout_1"],
 					"voucher_1": cash_up_values.get("voucher_1"),
 					"pos_total_credit_card": cash_up_values.get("pos_total_credit_card"),
+					"fleet_card_total": cash_up_values.get("fleet_card_total"),
+					"debit_card_total": cash_up_values.get("debit_card_total"),
 				},
 				"tank_readings": {
 					str(tank_id): {"opening_dip_litres": str(opening), "dip_litres": str(closing)}
