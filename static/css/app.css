@@ -78,6 +78,9 @@ h2 { margin: 0; font: 600 19px/1.2 Cambria, Georgia, serif; letter-spacing: 0; }
 .hq-site-picture-title { max-width: 90%; color: var(--teal-dark); font: 600 21px Cambria, Georgia, serif; text-align: center; overflow-wrap: anywhere; }
 .hq-site-picture:not(.hq-site-picture--empty) .hq-site-picture-title { color: white; text-shadow: 0 1px 4px rgba(0, 0, 0, .55); }
 .hq-site-card-content { padding: 15px; text-align: center; }
+.hq-site-notification-center { margin: 0 12px 12px; background: #f8fbf9; }
+.hq-site-notification-center > summary { flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 4px; }
+.hq-site-notification-center > summary span:first-child { max-width: 100%; overflow-wrap: anywhere; }
 .hq-site-identity { min-width: 0; }
 .hq-site-card p { margin: 0 0 6px; color: var(--muted); font-size: 12px; }
 .hq-site-card .hq-site-address { min-height: 18px; }

@@ -10,6 +10,10 @@ Create a virtual environment, install `requirements.txt`, set `FUELLEDGER_SECRET
 
 Use the Django admin to create sites and users. A user's FuelLedger permissions section assigns their HQ/site role and whether they can configure cash-up fields. Give site users a site assignment; HQ users have no single site assignment. New sites receive a starter cash-up form the first time their ledger is opened.
 
+## POS report importing
+
+The electronic-readings workflow accepts POS End of Shift and Business Analysis PDF reports. The report date and POS site must match the selected site; `Test Test Site` is exempt for cross-site testing. End of Shift reports do not import tank readings. Confirmed POS shift-number gaps are saved with the cash-up and shown in the HQ Notification Center. Apply pending migrations with `python manage.py migrate` before deployment.
+
 ## cPanel deployment
 
 FuelLedger uses PostgreSQL and the cPanel Python 3.11 virtual environment. Keep it separate from FoodlineControl: create a dedicated PostgreSQL database and database user in cPanel/phpPgAdmin, and keep the cPanel Python application root as `Fuelledger` with the matching domain or subdomain.

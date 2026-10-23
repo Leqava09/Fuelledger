@@ -1,4 +1,4 @@
-"""Parser for fuel readings in POS Business Analysis Reports."""
+"""Parser for fuel readings in POS reports."""
 import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -51,16 +51,43 @@ POS_DRY_ROW_PATTERN = re.compile(
 	re.MULTILINE | re.IGNORECASE,
 )
 TOTAL_CREDIT_CARD_PATTERN = re.compile(
-	rf"Total\s+Credit\s+Card\s*:?\s*({NUMBER})",
+	rf"Total\s*Credit\s*Card\s*:?\s*({NUMBER})",
 	re.IGNORECASE,
 )
 TOTAL_FLEET_CARD_PATTERN = re.compile(
-	rf"Total\s+Fleet\s+Card\s*:?\s*({NUMBER})",
+	rf"Total\s*Fleet\s*Card\s*:?\s*({NUMBER})",
 	re.IGNORECASE,
 )
 TOTAL_DEBIT_CARD_PATTERN = re.compile(
-	rf"Total\s+Debit\s+Card\s*:?\s*({NUMBER})",
+	rf"Total\s*Debit\s*Card\s*:?\s*({NUMBER})",
 	re.IGNORECASE,
+)
+END_SHIFT_PERIOD_PATTERN = re.compile(
+	r"Start date/time:\s*(\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2}).*?\n"
+	r"End date/time:\s*(\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})",
+	re.IGNORECASE,
+)
+END_SHIFT_FUEL_ROW_PATTERN = re.compile(
+	rf"^[ \t]*({GRADE})\s+{NUMBER}\s+\d+\s+({NUMBER})\s+({NUMBER})\s*$",
+	re.MULTILINE | re.IGNORECASE,
+)
+END_SHIFT_FUEL_ROW_CANDIDATE_PATTERN = re.compile(
+	rf"^[ \t]*{GRADE}\s+.*$",
+	re.MULTILINE | re.IGNORECASE,
+)
+END_SHIFT_ELECTRONIC_ROW_PATTERN = re.compile(
+	rf"^[ \t]*(\d+)\s+{NUMBER}\s+{NUMBER}\s+{NUMBER}\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s*$",
+	re.MULTILINE,
+)
+END_SHIFT_MECHANICAL_ROW_PATTERN = re.compile(
+	rf"^[ \t]*(\d+)\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s*$",
+	re.MULTILINE,
+)
+END_SHIFT_ROW_CANDIDATE_PATTERN = re.compile(r"^[ \t]*\d+\s+\S+.*$", re.MULTILINE)
+DRY_WET_SALES_PATTERN = re.compile(
+	rf"^[ \t]*(Dry|Wet) sales\s*:?\s*({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+"
+	rf"({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER}|NAN)\s*$",
+	re.MULTILINE | re.IGNORECASE,
 )
 POS_NOZZLE_SECTION_PATTERN = re.compile(
 	r"Sales Report from Pumps \((?:Mechanical|Machinical) totalizer movement by nozzle\)",
@@ -70,6 +97,13 @@ POS_NOZZLE_SECTION_PATTERN = re.compile(
 
 class ReportParseError(ValueError):
 	"""Raised when a PDF does not contain the expected report data."""
+
+
+def _business_analysis_site_name(text):
+	match = re.search(r"^For\s*\r?\n([^\r\n]+)", text, re.IGNORECASE | re.MULTILINE)
+	if not match:
+		raise ReportParseError("POS site name not found in the Business Analysis Report.")
+	return match.group(1).strip()
 
 
 def _decimal(value):
@@ -100,7 +134,158 @@ def extract_text(file_obj):
 		raise ReportParseError("The uploaded file could not be read as a PDF.") from exc
 
 
+def _parse_end_of_shift_report(text):
+	period_match = END_SHIFT_PERIOD_PATTERN.search(text)
+	if not period_match:
+		raise ReportParseError("End of Shift report period not found.")
+	try:
+		period_from = datetime.strptime(period_match.group(1), "%d.%m.%Y %H:%M:%S")
+		period_to = datetime.strptime(period_match.group(2), "%d.%m.%Y %H:%M:%S")
+	except ValueError as exc:
+		raise ReportParseError("The End of Shift report contains an invalid period.") from exc
+
+	site_match = re.search(
+		r"Silver:[^\r\n]*\r?\n([^\r\n]+)\r?\nCheques:",
+		text,
+		re.IGNORECASE,
+	)
+	if not site_match:
+		raise ReportParseError("POS site name not found in the End of Shift report.")
+	site_name = site_match.group(1).strip()
+	shift_match = re.search(r"Shift\s+number:\s*(\d+)", text, re.IGNORECASE)
+	if not shift_match:
+		raise ReportParseError("POS shift number not found in the End of Shift report.")
+
+	sales_matches = {
+		match.group(1).casefold(): match
+		for match in DRY_WET_SALES_PATTERN.finditer(text)
+	}
+	if "dry" not in sales_matches or "wet" not in sales_matches:
+		raise ReportParseError("Dry and wet sales totals were not found in the End of Shift report.")
+	dry_sales = sales_matches["dry"]
+	wet_sales = sales_matches["wet"]
+
+	fuel_sales_start = text.casefold().find("fuel sales by grade")
+	fuel_sales_end = text.casefold().find("fuel movement by grade", fuel_sales_start)
+	if fuel_sales_start < 0 or fuel_sales_end < 0:
+		raise ReportParseError("Fuel sales by grade section not found.")
+	fuel_section = text[fuel_sales_start:fuel_sales_end]
+	fuel_sales = [
+		{
+			"grade": match.group(1).upper(),
+			"litres": _decimal(match.group(2)),
+			"value_exvat": _decimal(match.group(3)),
+		}
+		for match in END_SHIFT_FUEL_ROW_PATTERN.finditer(fuel_section)
+	]
+	if not fuel_sales:
+		raise ReportParseError("No fuel sales grade rows were found in the End of Shift report.")
+	if len(END_SHIFT_FUEL_ROW_CANDIDATE_PATTERN.findall(fuel_section)) != len(fuel_sales):
+		raise ReportParseError("Some fuel sales grade rows could not be read.")
+	electronic_start = text.casefold().find("electronic totalizer movement by nozzle")
+	mechanical_start = text.casefold().find("calculated mechanical movement by nozzle", electronic_start)
+	if electronic_start < 0 or mechanical_start < 0:
+		raise ReportParseError("Electronic or mechanical nozzle movement section not found.")
+	electronic_section = text[electronic_start:mechanical_start]
+	electronic_rows = [
+		{
+			"number": int(match.group(1)),
+			"grade": f"Nozzle {int(match.group(1))}",
+			"opening": _decimal(match.group(2)),
+			"closing": _decimal(match.group(3)),
+			"totalizer_litres": _decimal(match.group(4)),
+			"sales_litres": _decimal(match.group(4)),
+			"variance": Decimal("0"),
+		}
+		for match in END_SHIFT_ELECTRONIC_ROW_PATTERN.finditer(electronic_section)
+	]
+	if not electronic_rows:
+		raise ReportParseError("No electronic nozzle rows were found in the End of Shift report.")
+	if len(END_SHIFT_ROW_CANDIDATE_PATTERN.findall(electronic_section)) != len(electronic_rows):
+		raise ReportParseError("Some numbered electronic nozzle rows could not be read.")
+	if len({row["number"] for row in electronic_rows}) != len(electronic_rows):
+		raise ReportParseError("The End of Shift report contains duplicate electronic nozzle numbers.")
+
+	mechanical_end = text.casefold().find("fuel sales by nozzle", mechanical_start)
+	if mechanical_end < 0:
+		raise ReportParseError("Mechanical nozzle section boundary not found.")
+	mechanical_section = text[mechanical_start:mechanical_end]
+	mechanical_rows = [
+		{
+			"number": int(match.group(1)),
+			"grade": f"Nozzle {int(match.group(1))}",
+			"opening": _decimal(match.group(2)),
+			"closing": _decimal(match.group(3)),
+			"totalizer_litres": _decimal(match.group(4)),
+			"sales_litres": _decimal(match.group(4)),
+			"variance": Decimal("0"),
+		}
+		for match in END_SHIFT_MECHANICAL_ROW_PATTERN.finditer(mechanical_section)
+	]
+	if not mechanical_rows:
+		raise ReportParseError("No mechanical nozzle rows were found in the End of Shift report.")
+	if len(END_SHIFT_ROW_CANDIDATE_PATTERN.findall(mechanical_section)) != len(mechanical_rows):
+		raise ReportParseError("Some numbered mechanical nozzle rows could not be read.")
+	if len({row["number"] for row in mechanical_rows}) != len(mechanical_rows):
+		raise ReportParseError("The End of Shift report contains duplicate mechanical nozzle numbers.")
+
+	payment_start = text.casefold().find("banking breakdown")
+	payment_end = text.casefold().find("payouts detail", payment_start)
+	if payment_start < 0 or payment_end < 0:
+		raise ReportParseError("Banking Breakdown section not found.")
+	payment_section = text[payment_start:payment_end]
+	account_match = re.search(rf"Total\s+Account:\s*[+-]?\s*({NUMBER})", payment_section, re.IGNORECASE)
+	payout_match = re.search(rf"Total\s+Payouts:\s*[+-]?\s*({NUMBER})", payment_section, re.IGNORECASE)
+	money_drops_match = re.search(rf"Money\s+Drops\s+for\s+Shift:\s*({NUMBER})", payment_section, re.IGNORECASE)
+	float_match = re.search(rf"Total\s+left\s+in\s+drawer:\s*({NUMBER})", payment_section, re.IGNORECASE)
+	credit_card_match = TOTAL_CREDIT_CARD_PATTERN.search(payment_section)
+	fleet_card_match = TOTAL_FLEET_CARD_PATTERN.search(payment_section)
+	debit_card_match = TOTAL_DEBIT_CARD_PATTERN.search(payment_section)
+	cheque_match = re.search(rf"Total\s+Cheque:\s*({NUMBER})", payment_section, re.IGNORECASE)
+	if not all((account_match, payout_match, money_drops_match)):
+		raise ReportParseError("Required cash-up totals were not found in Banking Breakdown.")
+
+	warnings = []
+	if abs(
+		sum((row["litres"] for row in fuel_sales), Decimal("0"))
+		- sum((row["totalizer_litres"] for row in electronic_rows), Decimal("0"))
+	) > Decimal("0.01"):
+		warnings.append("Pump fuel sales do not match the electronic nozzle totalizer.")
+	for reading_type, rows in (("electronic", electronic_rows), ("mechanical", mechanical_rows)):
+		for row in rows:
+			if abs(row["closing"] - row["opening"] - row["totalizer_litres"]) > Decimal("0.01"):
+				warnings.append(f"Nozzle {row['number']}: {reading_type} opening/closing movement does not match the reported difference.")
+
+	return {
+		"report_format": "end_of_shift",
+		"site_name": site_name,
+		"pos_shift_number": shift_match.group(1),
+		"period_from": period_from,
+		"period_to": period_to,
+		"business_date": period_from.date(),
+		"nozzles": electronic_rows,
+		"mechanical_nozzles": mechanical_rows,
+		"fuel_sales": fuel_sales,
+		"tank_readings": [],
+		"cash_up": {
+			"forecourt_total": _decimal(wet_sales.group(3)),
+			"safedrops": _decimal(money_drops_match.group(1)),
+			"account_1": _decimal(account_match.group(1)),
+			"payout_1": _decimal(payout_match.group(1)),
+			"shop_total": _decimal(dry_sales.group(6)),
+			"cash_float": _decimal(float_match.group(1)) if float_match else None,
+			"credit_card_total": _decimal(credit_card_match.group(1)) if credit_card_match else None,
+			"fleet_card_total": _decimal(fleet_card_match.group(1)) if fleet_card_match else None,
+			"debit_card_total": _decimal(debit_card_match.group(1)) if debit_card_match else None,
+			"voucher_1": _decimal(cheque_match.group(1)) if cheque_match else None,
+		},
+		"warnings": warnings,
+	}
+
+
 def parse_report(text):
+	if "end of shift report" in text.casefold():
+		return _parse_end_of_shift_report(text)
 	if "Business Analysis Report" not in text:
 		raise ReportParseError("This is not a Business Analysis Report.")
 	period_match = PERIOD_PATTERN.search(text)
@@ -297,6 +482,8 @@ def parse_report(text):
 	if abs(reported_pump_sales_litres - reported_pos_sales_litres) > Decimal("0.01"):
 		warnings.append("Pump fuel sales do not match the POS fuel sales total.")
 	return {
+		"report_format": "business_analysis",
+		"site_name": _business_analysis_site_name(text),
 		"period_from": period_from,
 		"period_to": period_to,
 		"business_date": period_from.date(),

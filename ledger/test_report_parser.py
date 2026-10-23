@@ -10,6 +10,8 @@ from ledger.report_parser import ReportParseError, extract_text, parse_report
 
 class ReportParserTests(SimpleTestCase):
 	REPORT_TEXT = """Business Analysis Report
+For
+Erius Olie BK t/a Texan Roodeplaat
 From: 2026-10-06 00:00:00                      To:2026-10-06 23:59:59
 Transactions summary as per POS system
 Dry sales: 784.000 10482.96 1169.38 11652.34 2687.10 14.86
@@ -46,6 +48,35 @@ DIESEL50PPM              7127.55 @ 2026-10-06 04:55:00        -40.24            
 ULP93                    1235.25 @ 2026-10-06 04:55:00         64.75            2073.04 @ 2026-10-06 23:59:59
 """
 
+	END_OF_SHIFT_TEXT = """End of Shift Report
+Start date/time: 21.10.2026 05:13:44
+End date/time: 21.10.2026 19:00:06
+Shift number: 1729
+Silver:____________
+Erius Olie BK t/a Texan Roodeplaat
+Cheques:____________
+Dry sales: 1 2 3 4 100 100 0
+Wet sales: 1 49105.59 2 3 4 5 0
+Fuel sales by grade
+Diesel 1.000 1 100.00 100.00
+Fuel movement by grade
+Banking Breakdown
+Money Drops for Shift: 10.00
+Total left in drawer: 2.00
+Total Account: 3.00
+Total Payouts: 4.00
+Total FleetCard: .00
+Total DebitCard: .00
+Total CreditCard: 5.00
+Total Cheque: .00
+Payouts Detail
+Electronic totalizer movement by nozzle
+1 0.00 0.00 0.00 100.00 110.00 10.00
+Calculated Mechanical movement by nozzle
+1 100.00 110.00 10.00
+Fuel sales by nozzle
+"""
+
 	def test_parses_report_period_and_nozzle_rows(self):
 		text = self.REPORT_TEXT
 		parsed = parse_report(text)
@@ -75,6 +106,20 @@ ULP93                    1235.25 @ 2026-10-06 04:55:00         64.75            
 		self.assertEqual(len(parsed["mechanical_nozzles"]), 1)
 		self.assertEqual(parsed["mechanical_nozzles"][0]["totalizer_litres"], Decimal("627.00"))
 		self.assertEqual(parsed["warnings"], [])
+		self.assertEqual(parsed["site_name"], "Erius Olie BK t/a Texan Roodeplaat")
+
+	def test_parses_end_of_shift_report_and_omits_tank_readings(self):
+		parsed = parse_report(self.END_OF_SHIFT_TEXT)
+
+		self.assertEqual(parsed["report_format"], "end_of_shift")
+		self.assertEqual(parsed["site_name"], "Erius Olie BK t/a Texan Roodeplaat")
+		self.assertEqual(parsed["pos_shift_number"], "1729")
+		self.assertEqual(parsed["business_date"], date(2026, 10, 21))
+		self.assertEqual(parsed["cash_up"]["shop_total"], Decimal("100"))
+		self.assertEqual(parsed["cash_up"]["forecourt_total"], Decimal("49105.59"))
+		self.assertEqual(parsed["nozzles"][0]["totalizer_litres"], Decimal("10.00"))
+		self.assertEqual(parsed["mechanical_nozzles"][0]["totalizer_litres"], Decimal("10.00"))
+		self.assertEqual(parsed["tank_readings"], [])
 
 	def test_rejects_unrecognized_numbered_nozzle_rows(self):
 		text = self.REPORT_TEXT.replace("DIESEL50PPM        7040.00", "PETROL95           7040.00")

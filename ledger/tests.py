@@ -38,6 +38,7 @@ from ledger.models import (
     Nozzle,
     NozzleFuelReading,
     POSReportAttachment,
+    POSShiftSequenceAlert,
     Site,
     SiteAuditEvent,
     SiteGroup,
@@ -1259,6 +1260,7 @@ class DailyFuelReadingWorkflowTests(TestCase):
             "period_from": datetime(2026, 10, 6, 0, 0),
             "period_to": datetime(2026, 10, 6, 23, 59, 59),
             "business_date": date(2026, 10, 6),
+            "site_name": "Reading Site",
             "warnings": ["Pump fuel sales do not match the POS fuel sales total."],
             "cash_up": {
                 "forecourt_total": Decimal("119973.10"),
@@ -1318,8 +1320,12 @@ class DailyFuelReadingWorkflowTests(TestCase):
 
         self.assertEqual(preview.status_code, 200)
         self.assertContains(preview, "Review report values")
-        self.assertContains(preview, "full-day report")
-        self.assertContains(preview, "Pump fuel sales do not match")
+        self.assertContains(preview, "This report imports readings")
+        self.assertNotContains(preview, "Report checks need review")
+        self.assertNotContains(preview, 'name="nozzle_1"')
+        self.assertNotContains(preview, 'name="product_diesel"')
+        self.assertContains(preview, "Nozzle 1 / Tank 1 / Diesel")
+        self.assertContains(preview, "Diesel</td>")
         self.assertContains(preview, "18250.35")
         self.assertContains(preview, "Total Fleet Card")
         self.assertContains(preview, "Total Debit Card")
@@ -1333,10 +1339,6 @@ class DailyFuelReadingWorkflowTests(TestCase):
             "selected_date": "2026-10-06",
             "report_token": token,
             "shift_label": "Night",
-            "nozzle_1": str(self.nozzle.pk),
-            "nozzle_2": str(self.nozzle_two.pk),
-            "product_diesel": "Diesel",
-            "product_petrol": "Petrol",
             "tank_diesel_1": str(self.tank.pk),
             "tank_opening_diesel_1": "800.00",
             "tank_closing_diesel_1": "900.00",
@@ -1410,6 +1412,13 @@ class DailyFuelReadingWorkflowTests(TestCase):
         self.assertTrue(next_preview.context["overwrite_existing"])
 
     def test_confirmed_opening_mismatch_notifies_hq_until_cleared(self):
+        CashUpShiftRecord.objects.create(
+            site=self.site,
+            business_date=date(2026, 10, 5),
+            shift_label="Day",
+            created_by=self.user,
+            values={"pos_shift_number": "1727"},
+        )
         previous = DailyFuelReading.objects.create(
             site=self.site,
             business_date=date(2026, 10, 5),
@@ -1427,6 +1436,8 @@ class DailyFuelReadingWorkflowTests(TestCase):
             "period_from": datetime(2026, 10, 6, 0, 0),
             "period_to": datetime(2026, 10, 6, 23, 59, 59),
             "business_date": date(2026, 10, 6),
+            "site_name": "Reading Site",
+            "pos_shift_number": "1729",
             "warnings": [],
             "cash_up": {
                 "forecourt_total": Decimal("100.00"),
@@ -1454,8 +1465,11 @@ class DailyFuelReadingWorkflowTests(TestCase):
             preview = self.client.post(upload_url, {"action": "upload", "shift_label": "Night", "report_pdf": upload})
 
         self.assertEqual(preview.status_code, 200)
-        self.assertContains(preview, "previous shift")
+        self.assertContains(preview, "Previous shift (Opening)")
         self.assertContains(preview, "7000.00")
+        self.assertNotContains(preview, "Opening readings differ from the previous shift")
+        self.assertContains(preview, "POS shift number is out of sequence")
+        self.assertEqual(preview.context["pos_sequence_issue"]["expected_number"], "1728")
         token = preview.context["report_token"]
         payload = {
             "action": "confirm",
@@ -1472,18 +1486,21 @@ class DailyFuelReadingWorkflowTests(TestCase):
             "cash_up_account_1": "3.00",
             "cash_up_payout_1": "4.00",
         }
-        confirmation_required = self.client.post(upload_url, payload)
-        self.assertEqual(confirmation_required.status_code, 200)
-        self.assertContains(confirmation_required, "Confirm import and notify HQ")
-        self.assertFalse(DailyFuelReading.objects.filter(site=self.site, business_date=date(2026, 10, 6)).exists())
-        self.assertFalse(FuelReadingSequenceAlert.objects.exists())
-
-        confirmed = self.client.post(upload_url, {**payload, "opening_mismatch_confirmed": "1"})
+        confirmed = self.client.post(
+            upload_url,
+            {**payload, "pos_sequence_confirmed": "1"},
+        )
         self.assertEqual(confirmed.status_code, 302)
         alert = FuelReadingSequenceAlert.objects.get(site=self.site)
         self.assertEqual(alert.previous_reading, Decimal("7000.00"))
         self.assertEqual(alert.entered_opening, Decimal("7040.00"))
         self.assertFalse(alert.approved)
+        pos_alert = POSShiftSequenceAlert.objects.get(site=self.site)
+        self.assertEqual(pos_alert.expected_number, "1728")
+        self.assertEqual(pos_alert.entered_number, "1729")
+        self.assertFalse(pos_alert.approved)
+        imported_cash_up = CashUpShiftRecord.objects.get(site=self.site, business_date=date(2026, 10, 6))
+        self.assertEqual(imported_cash_up.values["pos_shift_number"], "1729")
         imported_reading = DailyFuelReading.objects.get(site=self.site, business_date=date(2026, 10, 6))
         self.assertEqual(
             imported_reading.nozzle_readings.get(nozzle=self.nozzle).electronic_opening_reading,
@@ -1493,17 +1510,30 @@ class DailyFuelReadingWorkflowTests(TestCase):
         hq_user = User.objects.create_user(username="fuel-alert-hq", password="test-pass-123")
         UserProfile.objects.create(user=hq_user, role=UserProfile.Role.HQ)
         self.client.force_login(hq_user)
-        self.assertContains(self.client.get(reverse("hq-dashboard")), "Electronic reading opening mismatch")
+        dashboard = self.client.get(reverse("hq-dashboard"))
+        self.assertContains(dashboard, "Electronic reading opening mismatch")
+        self.assertContains(dashboard, "POS shift number alert")
+        self.assertEqual(dashboard.context["notification_count"], 2)
         approved = self.client.post(reverse("approve-fuel-reading-alert", args=[alert.pk]))
         self.assertRedirects(approved, reverse("hq-dashboard"), fetch_redirect_response=False)
         alert.refresh_from_db()
         self.assertTrue(alert.approved)
+        approved_pos = self.client.post(reverse("approve-pos-shift-alert", args=[pos_alert.pk]))
+        self.assertRedirects(approved_pos, reverse("hq-dashboard"), fetch_redirect_response=False)
+        pos_alert.refresh_from_db()
+        self.assertTrue(pos_alert.approved)
 
-    def test_report_import_rejects_duplicate_nozzle_mappings(self):
+    def test_report_import_rejects_duplicate_automatic_nozzle_mapping(self):
+        self.site.report_nozzle_mapping = {
+            "1": self.nozzle.pk,
+            "2": self.nozzle.pk,
+        }
+        self.site.save(update_fields=["report_nozzle_mapping"])
         report = {
             "period_from": datetime(2026, 10, 6, 0, 0),
             "period_to": datetime(2026, 10, 6, 23, 59, 59),
             "business_date": date(2026, 10, 6),
+            "site_name": "Reading Site",
             "cash_up": {
                 "forecourt_total": Decimal("1.00"),
                 "safedrops": Decimal("0.00"),
@@ -1528,13 +1558,81 @@ class DailyFuelReadingWorkflowTests(TestCase):
             "action": "confirm",
             "report_token": preview.context["report_token"],
             "shift_label": "Night",
-            "nozzle_1": str(self.nozzle.pk),
-            "nozzle_2": str(self.nozzle.pk),
         })
 
         self.assertEqual(rejected.status_code, 200)
-        self.assertContains(rejected, "unique configured nozzle")
+        self.assertContains(rejected, "precise configured match")
         self.assertFalse(DailyFuelReading.objects.exists())
+
+    def test_report_import_validates_site_and_allows_the_test_site_exception(self):
+        report = {
+            "period_from": datetime(2026, 10, 6, 0, 0),
+            "period_to": datetime(2026, 10, 6, 23, 59, 59),
+            "business_date": date(2026, 10, 6),
+            "site_name": "Different Site",
+            "warnings": [],
+            "cash_up": {
+                "forecourt_total": Decimal("100.00"),
+                "safedrops": Decimal("20.00"),
+                "account_1": Decimal("3.00"),
+                "payout_1": Decimal("4.00"),
+            },
+            "fuel_sales": [{"grade": "Diesel", "litres": Decimal("10.00")}],
+            "tank_readings": [],
+            "nozzles": [{
+                "number": 1,
+                "grade": "DIESEL50PPM",
+                "opening": Decimal("1.00"),
+                "closing": Decimal("2.00"),
+                "totalizer_litres": Decimal("1.00"),
+                "sales_litres": Decimal("1.00"),
+                "variance": Decimal("0.00"),
+            }],
+            "mechanical_nozzles": [],
+        }
+        upload_url = f"{reverse('fuel-report-import', args=[self.site.slug])}?date=2026-10-06&shift=Night"
+        upload = SimpleUploadedFile("report.pdf", b"%PDF-report", content_type="application/pdf")
+        with patch("ledger.views.parse_pdf", return_value=report):
+            rejected = self.client.post(upload_url, {"action": "upload", "shift_label": "Night", "report_pdf": upload})
+
+        self.assertEqual(rejected.status_code, 200)
+        self.assertContains(rejected, "belongs to a different site")
+        self.assertFalse(POSReportAttachment.objects.exists())
+
+        trading_site = Site.objects.create(name="Texan Roodeplaat", shift_count=2)
+        UserProfile.objects.filter(user=self.user).update(site=trading_site)
+        report["site_name"] = "Erius Olie BK t/a Texan Roodeplaat"
+        upload = SimpleUploadedFile("report.pdf", b"%PDF-report", content_type="application/pdf")
+        with patch("ledger.views.parse_pdf", return_value=report):
+            trading_site_accepted = self.client.post(
+                f"{reverse('fuel-report-import', args=[trading_site.slug])}?date=2026-10-06&shift=Night",
+                {"action": "upload", "shift_label": "Night", "report_pdf": upload},
+            )
+
+        self.assertEqual(trading_site_accepted.status_code, 200)
+        self.assertEqual(trading_site_accepted.context["mode"], "review")
+        self.assertEqual(POSReportAttachment.objects.filter(site=trading_site).count(), 1)
+
+        test_site = Site.objects.create(
+            name="Test",
+            shift_count=2,
+            use_tank_readings=False,
+        )
+        UserProfile.objects.filter(user=self.user).update(
+            site=test_site,
+            form_permissions=["electronic-readings", "cash-up"],
+        )
+        report["site_name"] = "Different Site"
+        upload = SimpleUploadedFile("report.pdf", b"%PDF-report", content_type="application/pdf")
+        with patch("ledger.views.parse_pdf", return_value=report):
+            test_site_accepted = self.client.post(
+                f"{reverse('fuel-report-import', args=[test_site.slug])}?date=2026-10-06&shift=Night",
+                {"action": "upload", "shift_label": "Night", "report_pdf": upload},
+            )
+
+        self.assertEqual(test_site_accepted.status_code, 200)
+        self.assertEqual(test_site_accepted.context["mode"], "review")
+        self.assertEqual(POSReportAttachment.objects.filter(site=test_site).count(), 1)
 
     def test_reading_form_has_four_tabs_with_the_current_form_selected(self):
         response = self.client.get(
@@ -2362,6 +2460,14 @@ class CashUpWorkflowTests(TestCase):
         self.assertContains(dashboard, "Card machine batch number alert")
         self.assertContains(dashboard, "BATCH-010")
         self.assertContains(dashboard, "BATCH-012")
+        self.assertContains(dashboard, f"{self.site.name} Notification Center")
+        self.assertContains(dashboard, f"{other_site.name} Notification Center")
+        self.assertEqual(len(dashboard.context["sites"]), 2)
+        self.assertEqual(
+            {site.name: len(site.notifications) for site in dashboard.context["sites"]},
+            {self.site.name: 1, other_site.name: 1},
+        )
+        self.assertNotContains(dashboard, 'id="notification-center-heading"')
         self.assertEqual(len(dashboard.context["notification_groups"]), 2)
         self.assertTrue(all(len(group["notifications"]) == 1 for group in dashboard.context["notification_groups"]))
 

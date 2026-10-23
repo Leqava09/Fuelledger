@@ -4,7 +4,7 @@
 <div class="page-heading compact-heading">
     <div>
         <div class="eyebrow"><a href="{% url 'fuel-reading-entry' site.slug 'electronic-readings' %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ selected_shift|urlencode }}">Electronic Readings</a> / {{ site.name }}</div>
-        <h1>Import fuel report</h1>
+        <h1>Import POS report</h1>
     </div>
     <div class="heading-actions"><a class="button secondary" href="{% url 'site-dashboard' site.slug %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ selected_shift|urlencode }}">Cancel</a></div>
 </div>
@@ -12,16 +12,15 @@
 {% if mode == "review" %}
 <section class="form-section">
     <div class="form-section-title"><span>01</span><h2>Review report values</h2></div>
-    <p>Report date: <strong>{{ report.business_date }}</strong>. This full-day report imports readings and mapped cash-up values together into the selected shift.</p>
+    <p>Report date: <strong>{{ report.business_date }}</strong>{% if report.site_name %} / POS site: <strong>{{ report.site_name }}</strong>{% endif %}{% if report.pos_shift_number %} / POS shift: <strong>{{ report.pos_shift_number }}</strong>{% endif %}. This report imports readings and mapped cash-up values together into the selected shift.</p>
     <p>Review every mapping and value. Nothing is saved until you confirm.</p>
     {% if overwrite_existing or overwrite_cash_up %}<div class="report-import-notice" role="status">This shift already has saved data. Confirming will replace matching electronic and mechanical readings, tank readings, imported fuel sales, and the mapped cash-up values.</div>{% endif %}
-    {% if report.warnings %}<div class="report-import-notice" role="status"><strong>Report checks need review</strong><ul>{% for warning in report.warnings %}<li>{{ warning }}</li>{% endfor %}</ul></div>{% endif %}
-    {% if opening_mismatches %}<div class="report-import-notice" role="alert"><strong>Opening readings differ from the previous shift</strong><ul>{% for mismatch in opening_mismatches %}<li>{{ mismatch.reading_type|title }} — {{ mismatch.nozzle }}: previous closing {{ mismatch.previous_reading }} L; report opening {{ mismatch.entered_opening }} L.</li>{% endfor %}</ul><label><input type="checkbox" name="opening_mismatch_confirmed" value="1" required> Confirm import and notify HQ for review</label></div>{% endif %}
     <form method="post" class="entry-form">
         {% csrf_token %}
         <input type="hidden" name="action" value="confirm">
         <input type="hidden" name="selected_date" value="{{ selected_date|date:'Y-m-d' }}">
         <input type="hidden" name="report_token" value="{{ report_token }}">
+        {% if pos_sequence_issue %}<div class="report-import-notice" role="alert"><strong>POS shift number is out of sequence</strong><p>Previous: {{ pos_sequence_issue.previous_number }} / Expected: {{ pos_sequence_issue.expected_number }} / Entered: {{ pos_sequence_issue.entered_number }}</p><label><input type="checkbox" name="pos_sequence_confirmed" value="1"> Confirm import and notify HQ for review</label></div>{% endif %}
         <div class="form-row">
             <label for="shift-label">Save under shift</label>
             <select id="shift-label" name="shift_label" required>
@@ -41,12 +40,7 @@
                         <td>{{ row.closing }}</td>
                         <td>{{ row.calculated_difference }}</td>
                         <td>{{ row.totalizer_litres }}</td>
-                        <td>
-                            <select name="nozzle_{{ row.number }}" required aria-label="Map report nozzle {{ row.number }}">
-                                <option value="">Choose nozzle</option>
-                                {% for nozzle in nozzle_choices %}<option value="{{ nozzle.id }}" {% if nozzle.id|stringformat:"s" == row.selected_nozzle_id|stringformat:"s" %}selected{% endif %}>{{ nozzle.label }}</option>{% endfor %}
-                            </select>
-                        </td>
+                        <td>{{ row.selected_nozzle_label|default:"No matching configured nozzle" }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -66,7 +60,7 @@
                         <td>{{ row.closing }}</td>
                         <td>{{ row.calculated_difference }}</td>
                         <td>{{ row.totalizer_litres }}</td>
-                        <td>{{ row.selected_nozzle_label|default:"Choose the matching nozzle in Electronic Readings above" }}</td>
+                        <td>{{ row.selected_nozzle_label|default:"No matching configured nozzle" }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -82,17 +76,13 @@
                     <tr>
                         <td>{{ row.grade }}</td>
                         <td>{{ row.litres }}</td>
-                        <td>
-                            <select name="product_{{ row.mapping_key }}" required aria-label="Map fuel sales grade {{ row.grade }}">
-                                <option value="">Choose product</option>
-                                {% for product in product_choices %}<option value="{{ product.value }}" {% if product.value == row.selected_product %}selected{% endif %}>{{ product.label }}</option>{% endfor %}
-                            </select>
-                        </td>
+                        <td>{{ row.selected_product|default:"No exact matching configured product" }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
+        {% if report.tank_readings %}
         <div class="reading-table-wrap">
             <h3>Tank Readings</h3>
             <table class="reading-table">
@@ -114,6 +104,7 @@
                 </tbody>
             </table>
         </div>
+        {% endif %}
         <div class="reading-table-wrap">
             <h3>Total Sales</h3>
             <table class="reading-table">
@@ -166,7 +157,7 @@
                 <tbody><tr><td>Total Payouts</td><td>Payout 1</td><td><input type="number" name="cash_up_payout_1" value="{{ report.cash_up.payout_1 }}" min="0" step="0.01" required></td></tr></tbody>
             </table>
         </div>
-        <div class="form-row"><label><input type="checkbox" name="remember_mappings" checked> Remember these nozzle, product, and tank matches for future reports</label></div>
+        <div class="form-row"><label><input type="checkbox" name="remember_mappings" checked> Remember these nozzle and product matches{% if report.tank_readings %}, and tank matches{% endif %} for future reports</label></div>
         <button class="button primary" type="submit">Import all report values</button>
     </form>
 </section>
@@ -186,7 +177,7 @@
             </select>
         </div>
         <div class="form-row">
-            <label for="report-pdf">Business Analysis Report PDF</label>
+            <label for="report-pdf">End of Shift or Business Analysis Report PDF</label>
             <input id="report-pdf" type="file" name="report_pdf" accept="application/pdf,.pdf" required>
         </div>
         <button class="button primary" type="submit">Read and review PDF</button>

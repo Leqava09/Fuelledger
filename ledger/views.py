@@ -45,6 +45,7 @@ from .models import (
 	NozzleFuelReading,
 	Nozzle,
 	POSReportAttachment,
+	POSShiftSequenceAlert,
 	ShiftEntry,
 	Site,
 	SiteAuditEvent,
@@ -258,11 +259,15 @@ def hq_dashboard(request):
 	pending_fuel_reading_alerts = FuelReadingSequenceAlert.objects.filter(approved=False).select_related(
 		"site", "daily_reading", "nozzle", "flagged_by",
 	).order_by("-created_at")
+	pending_pos_shift_alerts = POSShiftSequenceAlert.objects.filter(approved=False).select_related(
+		"site", "cash_up_record", "flagged_by",
+	).order_by("-created_at")
 	notification_groups = {}
 	for kind, alerts in (
 		("airtime", pending_airtime_alerts),
 		("card_machine", pending_card_machine_alerts),
 		("fuel_reading", pending_fuel_reading_alerts),
+		("pos_shift", pending_pos_shift_alerts),
 	):
 		for alert in alerts:
 			group = notification_groups.setdefault(alert.site_id, {"site": alert.site, "notifications": []})
@@ -273,6 +278,13 @@ def hq_dashboard(request):
 	)
 	for group in notification_groups:
 		group["notifications"].sort(key=lambda item: item["alert"].created_at, reverse=True)
+	notifications_by_site = {
+		group["site"].pk: group["notifications"]
+		for group in notification_groups
+	}
+	sites = list(sites)
+	for site in sites:
+		site.notifications = notifications_by_site.get(site.pk, [])
 	return render(request, "ledger/hq_dashboard.html", {
 		"sites": sites,
 		"pending_airtime_alerts": pending_airtime_alerts,
@@ -283,6 +295,7 @@ def hq_dashboard(request):
 			len(pending_airtime_alerts)
 			+ len(pending_card_machine_alerts)
 			+ len(pending_fuel_reading_alerts)
+			+ len(pending_pos_shift_alerts)
 		),
 	})
 
@@ -381,6 +394,21 @@ def approve_fuel_reading_sequence_alert(request, alert_id):
 
 @login_required
 @require_POST
+def approve_pos_shift_sequence_alert(request, alert_id):
+	profile = _profile(request.user)
+	if not request.user.is_superuser and (not profile or profile.role != UserProfile.Role.HQ):
+		return HttpResponseForbidden("Only HQ users can approve POS shift sequence alerts.")
+	alert = get_object_or_404(POSShiftSequenceAlert, pk=alert_id, approved=False)
+	alert.approved = True
+	alert.approved_by = request.user
+	alert.approved_at = timezone.now()
+	alert.save(update_fields=["approved", "approved_by", "approved_at"])
+	messages.success(request, "POS shift sequence alert approved.")
+	return redirect("hq-dashboard")
+
+
+@login_required
+@require_POST
 def approve_card_machine_batch_alert(request, alert_id):
 	profile = _profile(request.user)
 	if not request.user.is_superuser and (not profile or profile.role != UserProfile.Role.HQ):
@@ -424,8 +452,8 @@ def site_dashboard(request, slug):
 			and (key in permissions or (key == "fuel-sales" and "tank-reading" in permissions))
 		],
 		"can_import_fuel_report": (
-			all(_site_uses_fuel_reading(site, key) for key in ("electronic-readings", "fuel-sales", "tank-reading"))
-			and all(_can_access_site_form(request.user, site, key) for key in ("electronic-readings", "fuel-sales", "tank-reading", "cash-up"))
+			all(_site_uses_fuel_reading(site, key) for key in ("electronic-readings", "fuel-sales"))
+			and all(_can_access_site_form(request.user, site, key) for key in ("electronic-readings", "cash-up"))
 		),
 		"cash_up_tabs": [
 			{"key": key, "label": tab_label}
@@ -1633,6 +1661,48 @@ def _next_sequence_number(previous):
 	return f"{match.group(1)}{next_suffix}"
 
 
+def _pos_report_site_matches(site, report_site_name):
+	normalize = lambda value: re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+	if normalize(site.name) in {"test", "testsite", "testtestsite"}:
+		return True
+	report_names = re.split(r"\bt\s*/\s*a\b", str(report_site_name or ""), flags=re.IGNORECASE)
+	return normalize(site.name) in {normalize(name) for name in report_names}
+
+
+def _pos_shift_sequence_issue(site, report_shift_number, selected_date, shift_label):
+	entered = str(report_shift_number or "").strip()
+	if not entered or not entered.isdigit():
+		return None
+	shift_names = site.get_shift_names()
+	if shift_label not in shift_names:
+		return None
+	shift_order = {name: index for index, name in enumerate(shift_names)}
+	current_order = shift_order[shift_label]
+	candidates = CashUpShiftRecord.objects.filter(site=site, business_date__lte=selected_date).only(
+		"business_date", "shift_label", "values",
+	)
+	ordered_candidates = sorted(
+		candidates,
+		key=lambda item: (item.business_date, shift_order.get(item.shift_label, -1)),
+		reverse=True,
+	)
+	for candidate in ordered_candidates:
+		if candidate.business_date == selected_date and shift_order.get(candidate.shift_label, -1) >= current_order:
+			continue
+		previous = str((candidate.values or {}).get("pos_shift_number") or "").strip()
+		if not previous:
+			continue
+		expected = _next_sequence_number(previous)
+		if expected and entered != expected:
+			return {
+				"previous_number": previous,
+				"expected_number": expected,
+				"entered_number": entered,
+			}
+		return None
+	return None
+
+
 def _card_machine_batch_issues(site, values, selected_date, shift_label):
 	shift_names = site.get_shift_names()
 	if shift_label not in shift_names:
@@ -1907,9 +1977,9 @@ def _report_opening_mismatches(site, selected_date, shift_label, report_rows, se
 
 
 def _report_review_context(site, report, shift_label, selected_nozzles=None, selected_products=None, selected_tanks=None):
-	nozzle_choices = _report_nozzle_mapping(site, report["nozzles"], selected_nozzles)
+	_report_nozzle_mapping(site, report["nozzles"], selected_nozzles)
 	_report_nozzle_mapping(site, report.get("mechanical_nozzles", []), selected_nozzles)
-	product_choices = _report_product_mapping(site, report["fuel_sales"], selected_products)
+	_report_product_mapping(site, report["fuel_sales"], selected_products)
 	tank_choices = _report_tank_mapping(site, report["tank_readings"], selected_tanks)
 	previous_reading = _previous_daily_reading(
 		site, date.fromisoformat(report["business_date"]), shift_label, "electronic-readings",
@@ -1994,6 +2064,12 @@ def _report_review_context(site, report, shift_label, selected_nozzles=None, sel
 		"selected_shift": shift_label,
 		"overwrite_existing": overwrite_existing,
 		"overwrite_cash_up": overwrite_cash_up,
+		"pos_sequence_issue": _pos_shift_sequence_issue(
+			site,
+			report.get("pos_shift_number"),
+			date.fromisoformat(report["business_date"]),
+			shift_label,
+		),
 		"opening_mismatches": (
 			_report_opening_mismatches(
 				site,
@@ -2011,8 +2087,6 @@ def _report_review_context(site, report, shift_label, selected_nozzles=None, sel
 				reading_type="mechanical",
 			)
 		),
-		"nozzle_choices": nozzle_choices,
-		"product_choices": product_choices,
 		"tank_choices": tank_choices,
 	}
 
@@ -2020,11 +2094,11 @@ def _report_review_context(site, report, shift_label, selected_nozzles=None, sel
 @login_required
 def fuel_report_import(request, slug):
 	site = request.current_site
-	required_reading_types = ("electronic-readings", "fuel-sales", "tank-reading")
+	required_reading_types = ("electronic-readings", "fuel-sales")
 	if not all(_site_uses_fuel_reading(site, key) for key in required_reading_types):
 		raise Http404
-	if not all(_can_access_site_form(request.user, site, key) for key in (*required_reading_types, "cash-up")):
-		return HttpResponseForbidden("Your account needs access to all fuel readings and cash-up to import this report.")
+	if not all(_can_access_site_form(request.user, site, key) for key in ("electronic-readings", "cash-up")):
+		return HttpResponseForbidden("Your account needs access to electronic readings, fuel sales, and cash-up to import this report.")
 
 	shift_names = site.get_shift_names()
 	selected_date, _ = _selected_business_date(request)
@@ -2059,6 +2133,9 @@ def fuel_report_import(request, slug):
 		if payload.get("site_id") != site.pk:
 			context["error"] = "This report was prepared for a different site. Upload it again here."
 			return render(request, "ledger/fuel_report_import.html", context)
+		if not _pos_report_site_matches(site, payload.get("site_name")):
+			context["error"] = "The POS report belongs to a different site. Import it from the matching site."
+			return render(request, "ledger/fuel_report_import.html", context)
 		try:
 			business_date = date.fromisoformat(payload["business_date"])
 		except (KeyError, TypeError, ValueError):
@@ -2075,6 +2152,22 @@ def fuel_report_import(request, slug):
 		}
 		configured_tanks = {tank.pk: tank for tank in site.tanks.all()}
 		products = _site_fuel_products(list(configured_tanks.values()))
+		mapped_nozzle_ids = [row.get("selected_nozzle_id") for row in payload.get("nozzles", [])]
+		mapped_product_names = [row.get("selected_product") for row in payload.get("fuel_sales", [])]
+		if (
+			not mapped_nozzle_ids
+			or any(not nozzle_id for nozzle_id in mapped_nozzle_ids)
+			or len(set(mapped_nozzle_ids)) != len(mapped_nozzle_ids)
+			or any(product not in products for product in mapped_product_names)
+			or len(set(mapped_product_names)) != len(mapped_product_names)
+		):
+			context.update(_report_review_context(site, payload, shift_label))
+			context["report_token"] = request.POST.get("report_token", "")
+			context["error"] = (
+				"Every POS nozzle and fuel grade must have one precise configured match. "
+				"Check the site’s nozzle names and tank products before importing."
+			)
+			return render(request, "ledger/fuel_report_import.html", context)
 		previous_electronic = _previous_daily_reading(
 			site, business_date, shift_label, "electronic-readings",
 		)
@@ -2105,7 +2198,7 @@ def fuel_report_import(request, slug):
 		selected_cash_up = {}
 		try:
 			for row in payload["nozzles"]:
-				nozzle_id = int(request.POST.get(f"nozzle_{row['number']}", ""))
+				nozzle_id = int(row.get("selected_nozzle_id") or 0)
 				opening = Decimal(str(previous_electronic_values.get(
 					nozzle_id, row["opening"],
 				))).quantize(Decimal("0.01"))
@@ -2131,7 +2224,7 @@ def fuel_report_import(request, slug):
 
 			for row in payload["fuel_sales"]:
 				product_key = row["mapping_key"]
-				product = request.POST.get(f"product_{product_key}", "")
+				product = row.get("selected_product", "")
 				litres = Decimal(row["litres"]).quantize(Decimal("0.01"))
 				if product not in products or product_key in selected_product_keys or litres < 0:
 					raise ValueError
@@ -2206,7 +2299,13 @@ def fuel_report_import(request, slug):
 			selected_nozzles,
 			reading_type="mechanical",
 		)
-		if opening_mismatches and request.POST.get("opening_mismatch_confirmed") != "1":
+		pos_sequence_issue = _pos_shift_sequence_issue(
+			site,
+			payload.get("pos_shift_number"),
+			business_date,
+			shift_label,
+		)
+		if pos_sequence_issue and request.POST.get("pos_sequence_confirmed") != "1":
 			context.update(_report_review_context(
 				site,
 				payload,
@@ -2216,8 +2315,8 @@ def fuel_report_import(request, slug):
 				selected_tanks,
 			))
 			context["report_token"] = request.POST.get("report_token", "")
-			context["opening_mismatches"] = opening_mismatches
-			context["error"] = "Some report opening volumes do not match the previous shift closing readings. Confirm to import and notify HQ."
+			context["pos_sequence_issue"] = pos_sequence_issue
+			context["error"] = "The POS shift number does not follow the previous shift. Confirm to import and notify HQ."
 			return render(request, "ledger/fuel_report_import.html", context)
 
 		with transaction.atomic():
@@ -2351,6 +2450,8 @@ def fuel_report_import(request, slug):
 					cash_up_values[key] = str(selected_cash_up[key])
 			if "credit_card_total" in selected_cash_up:
 				cash_up_values["pos_total_credit_card"] = str(selected_cash_up["credit_card_total"])
+			if payload.get("pos_shift_number"):
+				cash_up_values["pos_shift_number"] = str(payload["pos_shift_number"])
 			repeat_counts = dict(cash_up_values.get("repeat_counts", {}))
 			repeat_counts.update({"sales_account": 1, "payouts": 1, "vouchers": 1})
 			cash_up_values["repeat_counts"] = repeat_counts
@@ -2367,6 +2468,32 @@ def fuel_report_import(request, slug):
 				cash_up_record.values = cash_up_values
 			cash_up_record.full_clean()
 			cash_up_record.save()
+			if pos_sequence_issue:
+				alert, created_alert = POSShiftSequenceAlert.objects.get_or_create(
+					cash_up_record=cash_up_record,
+					defaults={
+						"site": site,
+						"previous_number": pos_sequence_issue["previous_number"],
+						"expected_number": pos_sequence_issue["expected_number"],
+						"entered_number": pos_sequence_issue["entered_number"],
+						"flagged_by": request.user,
+					},
+				)
+				if not created_alert:
+					alert.site = site
+					alert.previous_number = pos_sequence_issue["previous_number"]
+					alert.expected_number = pos_sequence_issue["expected_number"]
+					alert.entered_number = pos_sequence_issue["entered_number"]
+					alert.flagged_by = request.user
+					alert.approved = False
+					alert.approved_by = None
+					alert.approved_at = None
+					alert.save(update_fields=[
+						"site", "previous_number", "expected_number", "entered_number",
+						"flagged_by", "approved", "approved_by", "approved_at",
+					])
+			elif payload.get("pos_shift_number"):
+				POSShiftSequenceAlert.objects.filter(cash_up_record=cash_up_record, approved=False).delete()
 			attachment_id = payload.get("attachment_id")
 			if attachment_id is not None:
 				attachment = get_object_or_404(
@@ -2436,7 +2563,7 @@ def fuel_report_import(request, slug):
 				before=before,
 				after=after,
 			)
-		messages.success(request, "Imported POS report readings, fuel sales, tank readings, and mapped cash-up values.")
+		messages.success(request, "Imported POS report readings, fuel sales, and mapped cash-up values.")
 		return redirect(
 			f"{reverse('fuel-reading-entry', args=[site.slug, 'electronic-readings'])}"
 			f"?date={business_date.isoformat()}&shift={shift_label}"
@@ -2463,6 +2590,14 @@ def fuel_report_import(request, slug):
 	except ReportParseError as exc:
 		context["error"] = str(exc)
 		return render(request, "ledger/fuel_report_import.html", context)
+	if not _pos_report_site_matches(site, report.get("site_name")):
+		context["error"] = "The POS report belongs to a different site. Import it from the matching site."
+		return render(request, "ledger/fuel_report_import.html", context)
+	if report["tank_readings"] and (
+		not _site_uses_fuel_reading(site, "tank-reading")
+		or not _can_access_site_form(request.user, site, "tank-reading")
+	):
+		return HttpResponseForbidden("This report contains tank readings, but your account or site is not configured to import them.")
 	if report["period_to"] < report["period_from"] or report["period_to"].date() != report["business_date"]:
 		context["error"] = "The report period is invalid or spans multiple business dates."
 		return render(request, "ledger/fuel_report_import.html", context)
@@ -2485,6 +2620,9 @@ def fuel_report_import(request, slug):
 	attachment.pdf.save(upload.name, upload, save=True)
 	serializable_report = {
 		"site_id": site.pk,
+		"site_name": report.get("site_name", ""),
+		"report_format": report.get("report_format", "business_analysis"),
+		"pos_shift_number": report.get("pos_shift_number"),
 		"attachment_id": attachment.pk,
 		"business_date": report["business_date"].isoformat(),
 		"period_from": report["period_from"].isoformat(sep=" "),

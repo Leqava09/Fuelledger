@@ -405,6 +405,34 @@ class POSReportAttachment(models.Model):
 		return f"{self.site} / {self.business_date} / {self.shift_label}"
 
 
+class POSShiftSequenceAlert(models.Model):
+	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="pos_shift_sequence_alerts")
+	cash_up_record = models.ForeignKey(CashUpShiftRecord, on_delete=models.CASCADE, related_name="pos_shift_sequence_alerts")
+	previous_number = models.CharField(max_length=30, blank=True)
+	expected_number = models.CharField(max_length=30, blank=True)
+	entered_number = models.CharField(max_length=30, blank=True)
+	flagged_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="pos_shift_sequence_alerts_flagged")
+	approved = models.BooleanField(default=False)
+	approved_by = models.ForeignKey(
+		settings.AUTH_USER_MODEL,
+		null=True,
+		blank=True,
+		on_delete=models.SET_NULL,
+		related_name="pos_shift_sequence_alerts_approved",
+	)
+	created_at = models.DateTimeField(auto_now_add=True)
+	approved_at = models.DateTimeField(null=True, blank=True)
+
+	class Meta:
+		ordering = ["-created_at"]
+		constraints = [
+			models.UniqueConstraint(fields=["cash_up_record"], name="unique_pos_shift_sequence_alert_per_cashup"),
+		]
+
+	def __str__(self):
+		return f"{self.site} / {self.cash_up_record.business_date} / {self.cash_up_record.shift_label} / POS shift mismatch"
+
+
 class AirtimeSequenceAlert(models.Model):
 	site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="airtime_sequence_alerts")
 	cash_up_record = models.ForeignKey(CashUpShiftRecord, on_delete=models.CASCADE, related_name="airtime_sequence_alerts")
