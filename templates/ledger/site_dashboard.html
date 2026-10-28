@@ -45,6 +45,12 @@
             {% endif %}
             {% endfor %}
         </div>
+        {% if can_import_fuel_report %}<section class="fuel-reading-section" aria-labelledby="report-import-heading">
+            <div class="section-heading"><h2 id="report-import-heading">POS Report Import</h2></div>
+            <div class="form-launcher-buttons">
+                <a class="button secondary" href="{% url 'fuel-report-import' site.slug %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ selected_shift|urlencode }}">Import POS Report</a>
+            </div>
+        </section>{% endif %}
         {% if cash_up_tabs %}
         <section class="fuel-reading-section" aria-labelledby="cash-up-heading">
             <div class="section-heading"><h2 id="cash-up-heading">Cash Up</h2></div>
@@ -54,12 +60,6 @@
         {% if fuel_reading_forms %}<section class="fuel-reading-section" aria-labelledby="fuel-reading-heading">
             <div class="section-heading"><h2 id="fuel-reading-heading">Fuel Readings</h2></div>
             {% include "ledger/fuel_reading_tabs.html" %}
-        </section>{% endif %}
-        {% if can_import_fuel_report %}<section class="fuel-reading-section" aria-labelledby="report-import-heading">
-            <div class="section-heading"><h2 id="report-import-heading">POS Report Import</h2></div>
-            <div class="form-launcher-buttons">
-                <a class="button secondary" href="{% url 'fuel-report-import' site.slug %}?date={{ selected_date|date:'Y-m-d' }}&amp;shift={{ selected_shift|urlencode }}">Import POS Report</a>
-            </div>
         </section>{% endif %}
         {% if "book-in-fuel" in site_forms or "transfer-fuel" in site_forms %}
         <section class="fuel-reading-section" aria-labelledby="fuel-movements-heading">
